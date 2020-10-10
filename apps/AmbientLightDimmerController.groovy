@@ -18,9 +18,7 @@ definition(
     author: "Guffman",
     description: "Control a dimmer based on current ambient light conditions, using a PID algorithm.",
     category: "Convenience",
-    iconUrl: "",
-    iconX2Url: "",
-    iconX3Url: ""
+    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/AmbientLightDimmerController.groovy"
 )
 
 preferences {
