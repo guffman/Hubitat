@@ -28,7 +28,7 @@ definition(
     category: "Convenience",
     iconUrl: "",
     iconX2Url: "",
-    importUrl: ""
+    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/SmartHumidistat.groovy"
 )
 preferences {
     page(name: "pageConfig") // Doing it this way eliminates the default app name/mode options.
