@@ -6,12 +6,19 @@ import groovy.transform.Field
  * v1.2.1 - mods by Guffman - remove configuration parameter support, add home/away, clamping on humidity report
  * v1.2.2 - mods by Guffman - clamping on setpoint report (seems to not scale correctly)
  * v1.2.0 - mods by Guffman - added temperature offset command and parameter report / attribute
+ 
+ Original: definition (name: "Advanced Honeywell T6 Pro Thermostat", namespace: "djdizzyd", author: "Bryan Copeland", importUrl: "https://raw.githubusercontent.com/djdizzyd/hubitat/master/Drivers/Honeywell/Advanced-Honeywell-T6-Pro.groovy") {
 */
 
 metadata {
-    definition (name: "Advanced Honeywell T6 Pro Thermostat", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/AdvancedHoneywellT6ProThermostat.groovy") {
-//    definition (name: "Advanced Honeywell T6 Pro Thermostat", namespace: "djdizzyd", author: "Bryan Copeland", importUrl: "https://raw.githubusercontent.com/djdizzyd/hubitat/master/Drivers/Honeywell/Advanced-Honeywell-T6-Pro.groovy") {
-
+    definition(
+        name: "Advanced Honeywell T6 Pro Thermostat",
+        namespace: "Guffman", 
+        author: "Guffman", 
+        importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/AdvancedHoneywellT6ProThermostat.groovy"
+    )
+    
+    {
         capability "Actuator"
         capability "Battery"
         capability "Configuration"
