@@ -5,7 +5,9 @@ definition(
     description: "Average some humidity sensors",
     category: "Convenience",
     iconUrl: "",
-    iconX2Url: "")
+    iconX2Url: "",
+    importUrl: ""
+)
 
 preferences {
 	page(name: "mainPage")
