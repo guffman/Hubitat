@@ -29,8 +29,8 @@
  *   Double-Tap Down   2    	   pressed
  *   Triple-Tap Up     3    	   pressed
  *   Triple-Tap Down   4    	   pressed
- *   Hold Up           5 		   pressed
- *   Hold Down         6 		   pressed
+ *   Hold Up           5 	   pressed
+ *   Hold Down         6 	   pressed
  *   Single-Tap Up     7    	   pressed
  *   Single-Tap Down   8    	   pressed
  *   4 taps up         9    	   pressed
@@ -40,8 +40,14 @@
  **/
 
 metadata {
-    definition(name: "HomeSeer FC200+ Fan Controller V2", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/HomeSeerFC200FanController.groovy")
-	{
+    definition(
+	    name: "HomeSeer FC200+ Fan Controller V2", 
+	    namespace: "Guffman", 
+	    author: "Guffman", 
+	    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/HomeSeerFC200FanController.groovy"
+    )
+	
+    {
         capability "SwitchLevel"
         capability "Actuator"
         capability "Switch"
