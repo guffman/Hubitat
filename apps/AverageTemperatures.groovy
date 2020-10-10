@@ -6,7 +6,7 @@ definition(
     category: "Convenience",
     iconUrl: "",
     iconX2Url: "",
-    importUrl: ""
+    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/AverageTemperatures.groovy"
 )
 
 preferences {
