@@ -28,7 +28,7 @@ definition(
     category: "Convenience",
     iconUrl: "",
     iconX2Url: "",
-    iconX3Url: ""
+    importUrl: ""
 )
 preferences {
     page(name: "pageConfig") // Doing it this way eliminates the default app name/mode options.
