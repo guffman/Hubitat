@@ -20,9 +20,10 @@
  *    2019-10-11  Stephan Hackett Added ContentType and Body inputs(very limited functionality)
  *    2019-12-26  Daniel Terryn	  Added extra header setting
  *    2020-04-21  Guffman         Modified, enhanced to manage a Node-RED instance. Changed from switch to pushbuttons
+ *.   2020-10-10. Guffman	  Added importUrl
  */
 metadata {
-	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "") {
+	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/Node-RED%20Controller.groovy") {
         
         capability "Actuator"
         capability "Momentary"
