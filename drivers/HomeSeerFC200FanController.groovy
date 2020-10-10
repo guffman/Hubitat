@@ -40,7 +40,8 @@
  **/
 
 metadata {
-    definition(name: "HomeSeer FC200+ Fan Controller V2", namespace: "Guffman", author: "Guffman", importUrl: "") {
+    definition(name: "HomeSeer FC200+ Fan Controller V2", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/HomeSeerFC200FanController.groovy")
+	{
         capability "SwitchLevel"
         capability "Actuator"
         capability "Switch"
