@@ -17,8 +17,6 @@ definition(
     author: "Guffman",
     description: "Control a fan (switch) based on relative humidity.",
     category: "Convenience",
-    iconUrl: "",
-    iconX2Url: "",
     importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/SmartHumidityFan.groovy"
 )
 
