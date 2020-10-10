@@ -22,14 +22,20 @@
  *    2020-04-21  Guffman         Modified, enhanced to manage a Node-RED instance. Changed from switch to pushbuttons
  */
 metadata {
-	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/NodeRedController.groovy") {
+	definition(
+		name: "Node-RED Controller", 
+		namespace: "Guffman", 
+		author: "Guffman", i
+		mportUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/NodeRedController.groovy"
+	) 
+	
+	{
+        	capability "Actuator"
+        	capability "Momentary"
         
-        capability "Actuator"
-        capability "Momentary"
-        
-        command    "reload"
-        command    "querySettings"
-        command    "queryNodes"
+        	command    "reload"
+        	command    "querySettings"
+        	command    "queryNodes"
 	}
 
 	preferences {
