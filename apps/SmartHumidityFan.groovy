@@ -19,7 +19,7 @@ definition(
     category: "Convenience",
     iconUrl: "",
     iconX2Url: "",
-    importUrl: ""
+    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/SmartHumidityFan.groovy"
 )
 
 preferences {
