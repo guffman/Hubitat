@@ -22,7 +22,7 @@
  *    2020-04-21  Guffman         Modified, enhanced to manage a Node-RED instance. Changed from switch to pushbuttons
  */
 metadata {
-	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "") {
+	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/NodeRedController.groovy") {
         
         capability "Actuator"
         capability "Momentary"
