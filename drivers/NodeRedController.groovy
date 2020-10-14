@@ -20,22 +20,21 @@
  *    2019-10-11  Stephan Hackett Added ContentType and Body inputs(very limited functionality)
  *    2019-12-26  Daniel Terryn	  Added extra header setting
  *    2020-04-21  Guffman         Modified, enhanced to manage a Node-RED instance. Changed from switch to pushbuttons
+ *    2020-10-14  Guffman         Added attributes for http response 
  */
 metadata {
-	definition(
-		name: "Node-RED Controller", 
-		namespace: "Guffman", 
-		author: "Guffman", i
-		mportUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/NodeRedController.groovy"
-	) 
-	
-	{
-        	capability "Actuator"
-        	capability "Momentary"
+	definition (name: "Node-RED Controller", namespace: "Guffman", author: "Guffman", importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/drivers/NodeRedController.groovy") {
+        capability "Sensor"
+        capability "Refresh"
+        capability "Actuator"
+        capability "Momentary"
         
-        	command    "reload"
-        	command    "querySettings"
-        	command    "queryNodes"
+        attribute "responseStatus", "number"     // http response
+        attribute "lastUpdated", "string"        // last successful query
+        
+        command    "reloadFlows"
+        command    "querySettings"
+        command    "queryNodes"
 	}
 
 	preferences {
@@ -49,32 +48,44 @@ def parse(String description) {
     if(logEnable) log.debug "raw response: ${description}"
 }
 
+def installed() {
+    initialize()
+}
+
 def initialize() {
-    if (logEnable) log.debug "Initializing"
+    if (logEnable) log.debug "Initialize"
     configure()
 }
 
 def configure() {
-	if (logEnable) log.debug "Configuring"	
-}
-
-def updated() {
     if (logEnable) {
+        log.debug "Configure"
 	    log.debug "debug logging is enabled."
 	    runIn(1800,logsOff)
     }
     state.nrURI = "http://" + deviceIP + ":" + devicePort
-    state.lastRestart = " "
+    if (!state.lastRestart) state.lastRestart = " "
     querySettings()
-    
+    unschedule()
+    runEvery5Minutes(refresh)
+}
+
+def updated() {
+    if (logEnable) log.debug "Updated"
+    configure()
+}
+
+def refresh() {
+    if (logEnable) "Refresh handler - query Node-RED settings"
+    querySettings()
 }
 
 def push() {
     if (logEnable) "Push handler - reload and restart all flows"
-    reload("reload")
+    reloadFlows("reload")
 }
 
-def reload() {
+def reloadFlows() {
     // Reload command, full || nodes || flows || reload
     def type = "reload"
     def hdr = [:]
@@ -96,8 +107,7 @@ def reload() {
 		if (response?.status == 200 || response?.status == 204) {
             if (logEnable) log.debug "result: ${response.data}"
             sendEvent(name: "push", isStateChange: true)
-            def date = new Date()
-            state.lastRestart = date.format("MM/dd/yyyy HH:mm:ss")
+            sendUpdatedEvent()
 		}
 		else {
 			log.warn "${response?.status}"
@@ -124,10 +134,12 @@ def querySettings() {
             if (logEnable) log.debug "result: ${response.data}"
             state.httpNodeRoot = response.data.httpNodeRoot
             state.version = response.data.version
+            sendUpdatedEvent()
 		}
 		else {
 			log.warn "${response?.status}"
 		}
+        sendEvent(name: "responseStatus", value: response?.status)
 	}
 }
 
@@ -148,11 +160,19 @@ def queryNodes() {
 	    response ->
 		if (response?.status == 200) {
             if (logEnable) log.debug "result: ${response.data}"
+            sendUpdatedEvent()
 		}
 		else {
 			log.warn "${response?.status}"
 		}
+        sendEvent(name: "responseStatus", value: response?.status)
 	}
+}
+
+def sendUpdatedEvent() {
+    def date = new Date()
+    dateStr = date.format("MM/dd/yyyy HH:mm:ss")
+    sendEvent(name: "lastUpdated", value: dateStr)
 }
 
 def logsOff() {
