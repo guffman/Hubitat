@@ -2,7 +2,7 @@
  *  ****************  Ceiling Fan Controller  ****************
  *
  *  Usage:
- *  This was designed to control a ceiling fan using a Virtual Fan Controller tied to a smart dimmer.
+ *  This was designed to control a ceiling fan using a Virtual Fan Controller device synched to a Smart Dimmer device.
  *
 **/
 
