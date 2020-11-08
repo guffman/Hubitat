@@ -9,7 +9,7 @@
 *
 *  Copyright 2018 Guffman Ventures LLC
 *  GNU General Public License v2 (https://www.gnu.org/licenses/gpl-2.0.txt)
-*
+*  Acknowledgement to someone in the community for the logging code segments (I can't remember who).
 */
 
 definition(
@@ -33,23 +33,23 @@ def pageConfig() {
 		}
 	    section("Devices")
 		{
-			input "illuminanceSensor", "capability.illuminanceMeasurement", title: "Input - Illuminance Sensor:", required: true
-			input "dimmer", "capability.switchLevel", title: "Output - Dimmer:", required: true
-            input "dimmerController", "capability.holdableButton", title: "Dimmer Controller:", required: false
+	            input "illuminanceSensor", "capability.illuminanceMeasurement", title: "Input - Illuminance Sensor:", required: true
+		    input "dimmer", "capability.switchLevel", title: "Output - Dimmer:", required: true
+                    input "dimmerController", "capability.holdableButton", title: "Dimmer Controller:", required: false
 		}
         
 		section("Lux Controller Settings")
 		{
 		    input "loopSpt", "number", title: "Illuminance Setpoint (lux):", required: true, defaultValue: 40	
-            input "loopKp", "decimal", title: "Controller Gain:", required: true, defaultValue: 1.0
-            input "loopKi", "decimal", title: "Controller Reset Time (minutes):", required: true, defaultValue: 0.25
-            input "loopOutputLowLimit", "number", title: "Minimum output in Controller Auto mode (%)", required: true, defaultValue: 5
-            input "loopOutputHighLimit", "number", title: "Maximum output in Controller Auto mode (%)", required: true, defaultValue: 100
-            input "loopOutputDeadband", "number", title: "Controller output deadband (%)", required: true, defaultValue: 2
-            input "loopOutputCycleLimit", "number", title: "Controller output change limit per cycle (%)", required: true, defaultValue: 10
-            input "loopExecInterval", "number", title: "Controller execution frequency (minutes):", required: true,  defaultValue: 1
-			input "loopManualTimeout", "number", title: "Timed return to Controller Auto mode after manual output adustment (minutes):", required: true,  defaultValue: 5
-			input "modes", "mode", title: "Select location mode(s) that disable controller Auto mode", multiple: true
+                    input "loopKp", "decimal", title: "Controller Gain:", required: true, defaultValue: 1.0
+                    input "loopKi", "decimal", title: "Controller Reset Time (minutes):", required: true, defaultValue: 0.25
+                    input "loopOutputLowLimit", "number", title: "Minimum output in Controller Auto mode (%)", required: true, defaultValue: 5
+                    input "loopOutputHighLimit", "number", title: "Maximum output in Controller Auto mode (%)", required: true, defaultValue: 100
+                    input "loopOutputDeadband", "number", title: "Controller output deadband (%)", required: true, defaultValue: 2
+                    input "loopOutputCycleLimit", "number", title: "Controller output change limit per cycle (%)", required: true, defaultValue: 10
+                    input "loopExecInterval", "number", title: "Controller execution frequency (minutes):", required: true,  defaultValue: 1
+	            input "loopManualTimeout", "number", title: "Timed return to Controller Auto mode after manual output adustment (minutes):", required: true,  defaultValue: 5
+		    input "modes", "mode", title: "Select location mode(s) that disable controller Auto mode", multiple: true
 		}
         
 		section("Logging")
