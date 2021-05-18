@@ -1,4 +1,69 @@
-    //Sensor validity tests
+//
+// This app is derived from the community 'Average Temperatures' app written by Bruce Ravenel. Td calculation from Ashok Aayar NodeRed function code.
+//
+//
+definition(
+    name: "Virtual Dewpoint Sensor",
+    namespace: "Guffman",
+    author: "Guffman",
+    description: "Calculate a dewpoint, given a humidity and a temperature",
+    category: "Convenience",
+    iconUrl: "",
+    iconX2Url: "")
+
+preferences {
+	page(name: "mainPage")
+}
+
+def mainPage() {
+	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
+		section {
+			input "thisName", "text", title: "Name this virtual dewpoint sensor", submitOnChange: true
+            if(thisName) {
+                app.updateLabel("$thisName")
+                state.label = thisName
+            }
+			input "tempSensor", "capability.temperatureMeasurement", title: "Select Temperature Sensor", submitOnChange: true, required: true, multiple: false
+			input "humidSensor", "capability.relativeHumidityMeasurement", title: "Select Humidity Sensor", submitOnChange: true, required: true, multiple: false
+			input "lowClamp", "decimal", title: "Dewpoint clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
+            input "highClamp", "decimal", title: "Dewpoint clamp value high:", defaultValue: 70.0, required: true, submitOnChange: false        
+		}
+	}
+}
+
+def installed() {
+	initialize()
+}
+
+def updated() {
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+	def dewpointDev = getChildDevice("Dewpoint_${app.id}")
+	
+	dewpointDev.setTemperature(initDewpoint)
+	subscribe(tempSensor, "temperature", tempHandler)
+    subscribe(humidSensor, "humidity", humidHandler)
+    calcDewpoint()
+}
+
+def calcDewpoint() {
+
+    def dewpointDev = getChildDevice("Dewpoint_${app.id}")
+    def currentDewpoint = dewpointDev.currentValue("temperature")
+    def currentTemp = tempSensor.currentValue("temperature")
+    def currentHumid = humidSensor.currentValue("humidity")
+    def tempC = f2c(currentTemp)
+    def dewpointC = dpC(tempC, currentHumid)
+    def result = c2f(dewpointC)
+    def dewpointF = result.toDouble().round(1)
+    
+    //log.info "In calcDewpoint, currentDewpoint=${currentDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, dewpointF=${dewpointF}" 
+	
+	
+//Sensor validity tests
     dptStr = String.format("%.1f", dewpointF) + "°F"
     dptStr = dptStr.trim()
     
