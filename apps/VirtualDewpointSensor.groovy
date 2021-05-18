@@ -99,7 +99,7 @@ def calcDewpoint() {
     def result = c2f(dewpointC)
     def newDewpoint = result.toDouble().round(1)
     
-    log.info "In calcDewpoint, prevDewpoint=${prevDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, newDewpoint=${newDewpoint}" 
+    // log.info "In calcDewpoint, prevDewpoint=${prevDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, newDewpoint=${newDewpoint}" 
     
     // Validity tests 
     if ((result >= lowClamp) && (result <= highClamp)) {
