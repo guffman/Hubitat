@@ -19,7 +19,7 @@ definition(
     author: "Guffman",
     description: "Periodically calculate a dewpoint in degrees Farenheit, given a humidity and a temperature. Allow for time series smoothing using an exponential smoothing filter algorithm.",
     category: "Convenience",
-    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/VirtualDewpointSensor.groovy"
+    importUrl: "https://raw.githubusercontent.com/guffman/Hubitat/master/apps/VirtualDewpointSensor.groovy",
     iconUrl: "",
     iconX2Url: "")
 
