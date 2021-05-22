@@ -15,7 +15,7 @@
 *    2020-07-25  Marc Chevis    Added features for feedback indicators, Thermostat association and related fan controls.
 *    2020-10-04  Marc Chevis    Revised thermostat fan mode to follow dehumidifying power feedback in lieu of control output. 
 *    2020-10-23  Marc Chevis    Revised Smart Humidistat app to control dewpoint
-*    2021-05-21  Marc Chevis    Removed unused features
+*    2021-05-21  Marc Chevis    Removed unused features, added minimum dehumidify run time feature
 *
 *
 */
