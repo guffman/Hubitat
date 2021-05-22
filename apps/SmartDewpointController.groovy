@@ -11,15 +11,16 @@
 *
 *    Date        Who            What
 *    ----        ---            ----
-*    2019-12-25  Guffman        Original Creation
-*    2020-07-25  Guffman        Added features for feedback indicators, Thermostat association and related fan controls.
-*    2020-10-04  Guffman        Revised thermostat fan mode to follow dehumidifying power feedback in lieu of control output. 
-*    2020-10-23  Guffman        Forked Smart Humidistat app to control dewpoint
+*    2019-12-25  Marc Chevis    Original Creation
+*    2020-07-25  Marc Chevis    Added features for feedback indicators, Thermostat association and related fan controls.
+*    2020-10-04  Marc Chevis    Revised thermostat fan mode to follow dehumidifying power feedback in lieu of control output. 
+*    2020-10-23  Marc Chevis    Revised Smart Humidistat app to control dewpoint
+*    2021-05-21  Marc Chevis    Removed unused features
 *
 *
 */
 
-def version() {"v0.1"}
+def version() {"v0.2"}
 
 definition(
     name: "Smart Dewpoint Controller",
@@ -50,10 +51,9 @@ def pageConfig() {
 		}
 		section("Gap Controller Settings")
 		{
-            input "loopDband", "decimal", title: "Deadband (%)", required: true, defaultValue: 1.0
-            input "loopSptOffsetAway", "decimal", title: "Setpoint offset when location Away mode (%)", required: true, defaultValue: 1.0
-            input "onDelay", "number", title: "Dehumidify Control Output On/Off Delay(sec)", required: true, defaultValue: 60
-            input "minOnTime", "number", title: "Dehumidify Control Minimum On Time (mins)", required: true, defaultValue: 5
+            input "loopDband", "decimal", title: "Deadband (°F)", required: true, range: "0.5..3.0", defaultValue: 1.0
+            input "onDelay", "number", title: "Dehumidify Control Output On/Off Delay(sec)", required: true, range: "5..120", defaultValue: 60
+            input "minOnTime", "number", title: "Dehumidify Control Minimum On Time (mins)", required: true, range: "0..30", defaultValue: 5
         }       
         section("Associated Devices Settings")
         {
@@ -63,9 +63,8 @@ def pageConfig() {
             input "fanFeedbackPwrLimit", "number", title: "Fan Control Feedback Power Threshold (W)", required: false, defaultValue: 50
             input "fanFeedbackSwitch", "capability.switch", title: "Fan Control Feedback Indicator - Switch:", required: false, multiple: false
             input "tstat", "capability.thermostat", title: "Associated Thermostat:", required: true, multiple: false
-            input "tstatFanControl", "bool", title: "Thermostat Fan Mode Circulate/On Follows Dehumidifying State", required: false, defaultValue: true
-            input "tstatFanResetDelay", "number", title: "Thermostat Fan Mode Return to Circulate Delay (sec)", required: false, defaultValue: 15
-            input "modes", "mode", title: "Select location mode(s) that disable controller Auto mode", multiple: true
+            input "tstatFanControl", "bool", title: "Thermostat Fan Mode (On/Circ) Follows Dehumidifying State", required: false, defaultValue: true
+            input "tstatFanResetDelay", "number", title: "Thermostat Fan Mode Return to Circ Delay (sec)", required: false, range: "0..300", defaultValue: 60
 		}
 		section("Logging")
 		{                       
@@ -98,100 +97,52 @@ def initialize()
 {
     infolog "Initializing"
 
-    // Not sure what to use auto mode for yet, need to work on offPermissive logic
+    // Not sure what to use auto mode for yet
     state.autoMode = true
+    
+    // offPermissive is used to prevent the controller transitioning to off prior to minOnTime. Prevents short-cycling of the dehumidifier.
+    // While offPermissive is true, the controller is permitted to turn off.
     state.offPermissive = true
-    state.pv  = tempSensor.currentValue("temperature").toFloat()
-    state.pvStr = String.format("%.1f", state.pv) + "°F"
     
-    subscribe(location, "mode", modeChangeHandler)
-    setModePermissive()
-   
-    subscribe(tstat, "thermostatFanMode", tstatFanModeHandler)
-    
-    subscribe(tstat, "thermostatMode", tstatModeHandler)
-    
-    subscribe(humControlSwitch, "switch", humSwitchHandler)
-    if (humControlSwitch.currentValue("switch") == "on") {
+    // Need to initialize the controller state - use the humidControlSwitch state
+    state.co = (humControlSwitch.currentValue("switch") == "on") ? true : false
+/*    if (humControlSwitch.currentValue("switch") == "on") {
         state.co = true
     } else {
         state.co = false
     }
-         
+*/
+    subscribe(humControlSwitch, "switch", humSwitchHandler)   
+    
     if (fanControlSwitch != null) {
         subscribe(fanControlSwitch, "switch", fanSwitchHandler)
-        if (fanFeedbackSwitch.currentValue("switch") == "on") {
-            state.fanFeedback = true
-        } else {
-            state.fanFeedback = false
-        }
     }
-
-    debuglog "Initializing: pv=${state.pvStr}, state.co=${state.co}"
-
-    subscribe(powerMeter, "power", powerMeterHandler)
-    state.power = powerMeter.currentValue("power")
-    calcEquipmentStates()
-    subscribe(tempSensor, "temperature", temperatureHandler)
+    
+    state.pv  = tempSensor.currentValue("temperature").toFloat()
+    state.pvStr = String.format("%.1f", state.pv) + "°F"
+    subscribe(tempSensor, "temperature", dewpointHandler)
+    
     subscribe(loopSpt, "temperature", sptHandler)
+    subscribe(tstat, "thermostatFanMode", tstatFanModeHandler)
+    subscribe(tstat, "thermostatMode", tstatModeHandler)
+    
+    state.power = powerMeter.currentValue("power")    
+    subscribe(powerMeter, "power", powerMeterHandler)
+
+    calcEquipmentStates()
     calcSetpoints()
     execControlLoop()
     
     state.label = customLabel
 }
 
-/* def getAvgTemp()
+def dewpointHandler(evt)
 {
-    def sum = 0.0
-    def count = 0
-    tempSensor.each { sensor -> 
-        sum += sensor.currentValue("temperature").toFloat()
-        count ++
-    }
-    return (sum / count)
-} */
-
-def setModePermissive()
-{
-    debuglog "setModePermissive: location.mode = ${location.mode}"
-    debuglog "setModePermissive: settings.modes = ${modes}"
-    
-    state.modePermissive = true
-    if(modes != null) {
-        if (modes.contains(location.mode))
-		{
-			debuglog "setModePermissive: Entered a disabled mode, turning off mode permissive"
-			state.modePermissive = false
-		}
-	    else
-	    {	
-		    debuglog "setModePermissive: Entered an enabled mode, turning on mode permissive"
-		    state.modePermissive = true
-	    }
-    }
-    else
-    {
-        debuglog "setModePermissive: No modes specified in configuration"
-    }
-}
-
-def modeChangeHandler(evt)
-{
-    infolog "modeChangeHandler: mode changed: ${evt.value}"
-
-    setModePermissive()
-    execControlLoop()
-}
-
-def temperatureHandler(evt)
-{
-    infolog "temperatureHandler: value changed: ${evt.value}"
-    debuglog "temperatureHandler: mode permissive = ${state.modePermissive}"
-    debuglog "temperatureHandler: controller output = ${state.co}"
+    infolog "dewpointHandler: value changed: ${evt.value}"
+    debuglog "dewpointHandler: controller output = ${state.co}"
 
     state.pv = tempSensor.currentValue("temperature").toFloat()
     state.pvStr = String.format("%.1f", state.pv) + "°F"
-    debuglog "temperatureHandler: pv = ${state.pv}"
     
     execControlLoop()
 }
@@ -199,96 +150,50 @@ def temperatureHandler(evt)
 def sptHandler(evt)
 {
     infolog "sptHandler: setpoint changed: ${evt.value}"
-    debuglog "sptHandler: mode permissive = ${state.modePermissive}"
-    debuglog "sptHandler: controller output = ${state.co}"
+    debuglog "sptHandler: state.pv = ${state.pv}, controller output = ${state.co}"
 
-    state.pv = getAvgTemp()
-    state.pvStr = String.format("%.1f", state.pv) + "°F"
-    debuglog "sptHandler: pv = ${state.pv}"
     calcSetpoints()
     execControlLoop()
-}
-
-def calcSetpoints() 
-{
-    infolog "calcSetpoints: loopDband=${loopDband}"
-    spt = loopSpt.currentValue("temperature").toFloat()
-    infolog "calcSetpoints: setpoint=${spt}"
-    state.loopSptLow = (spt - (loopDband / 2.0))
-    state.loopSptHigh = (spt + (loopDband / 2.0))
-    debuglog "calcSetpoints: loopSptLow=${state.loopSptLow}"
-    debuglog "calcSetpoints: loopSptHigh=${state.loopSptHigh}"
-        
-}
-
-def humSwitchHandler(evt) 
-{
-    infolog "humSwitchHandler: Switch changed: ${evt.value}"
-    debuglog "humSwitchHandler: mode permissive = ${state.modePermissive}"
-    
-	switch(evt.value)
-	{
-		case "on":
-            state.co = true
-			break
-        case "off":
-            state.co = false
-			break
-    }
 }
 
 def powerMeterHandler(evt)
 {
     infolog "powerMeterHandler: Power changed: ${evt.value}"
+    debuglog "powerMeterHandler: state.pv = ${state.pv}, controller output = ${state.co}"
     state.power = evt.value
     calcEquipmentStates()
-}
-
-def calcEquipmentStates() 
-{
-    pwr = state.power.toDouble()
-    infolog "calcEquipmentStates: pwr=${pwr}"
-    hfb = (pwr > humFeedbackPwrLimit) ? true : false
-    ffb = (pwr > fanFeedbackPwrLimit) ? true : false
-    
-    infolog "calcEquipmentStates: humFeedbackSwitch = ${hfb}"
-    state.humFeedback = hfb
-    if (hfb) {
-        humFeedbackSwitch.on()
-        if (tstatFanControl) {
-            debuglog "calcEquipmentStates: tstatFanControl = ${tstatFanControl}, setting tstat fan to on"
-            runIn(15, 'tstatFanOn')
-        }
-    } else {
-        humFeedbackSwitch.off()
-        if (tstatFanControl) {
-            debuglog "calcEquipmentStates: tstatFanControl = ${tstatFanControl}, tstatFanResetDelay = ${tstatFanResetDelay}, setting tstat fan to circ"
-            runIn(tstatFanResetDelay, 'tstatFanCirc')
-        }
-    }
-    
-    if (fanFeedbackSwitch != null) {
-        infolog "calcEquipmentStates: fanFeedbackSwitch = ${ffb}"
-        state.fanFeedback = ffb
-        ffb ? fanFeedbackSwitch.on() : fanFeedbackSwitch.off()
-    }
 }
 
 def fanSwitchHandler(evt) 
 {
     infolog "fanSwitchHandler: Switch changed: ${evt.value}"
-    debuglog "fanSwitchHandler: mode permissive = ${state.modePermissive}"
+    debuglog "fanSwitchHandler: controller output = ${state.co}"
     
 	switch(evt.value)
 	{
 		case "on":
-            state.co = true
+            state.fanCo = true
 			break
         case "off":
-            state.co = false
+            state.fanCo = false
 			break
     }
-    state.fanCo = state.co
+}
+
+def humSwitchHandler(evt) 
+{
+    infolog "humSwitchHandler: Switch changed: ${evt.value}"
+    debuglog "humSwitchHandler: controller output = ${state.co}"
+    
+	switch(evt.value)
+	{
+		case "on":
+            state.humCo = true
+			break
+        case "off":
+            state.humCo = false
+			break
+    }
 }
 
 def tstatModeHandler(evt)   
@@ -301,84 +206,126 @@ def tstatFanModeHandler(evt)
     infolog "tstatFanModeHandler: Thermostat fan mode changed: ${evt.value}"
 }
 
-def execControlLoop()
+def calcSetpoints() 
 {
-    if (state.modePermissive) {
-        
-        debuglog "execControlLoop: evaluating controller state"
+    infolog "calcSetpoints:"
+    debuglog "calcSetpoints: controller output = ${state.co}"
+    
+    spt = loopSpt.currentValue("temperature").toFloat()
+    state.loopSptLow = (spt - (loopDband / 2.0))
+    state.loopSptHigh = (spt + (loopDband / 2.0))
+    infolog "calcSetpoints: setpoint=${spt}, loopDband=${loopDband}, loopSptLow=${state.loopSptLow}, loopSptHigh=${state.loopSptHigh}"
+}
 
-        // Compute excursion states
+def calcEquipmentStates() 
+{
+    infolog "calcEquipmentStates:"
+    debuglog "calcEquipmentStates: controller output = ${state.co}"
+    
+    pwr = state.power.toDouble()
+    debuglog "calcEquipmentStates: pwr=${pwr}"
+    
+    state.humFeedback = (pwr > humFeedbackPwrLimit) ? true : false
+    debuglog "calcEquipmentStates: humFeedbackSwitch = ${state.humFeedback}"
+    state.humFeedback ? humFeedbackSwitch.on() : humFeedbackSwitch.off()
+
+    if (fanFeedbackSwitch != null) {
+        state.fanFeedback = (pwr > fanFeedbackPwrLimit) ? true : false
+        debuglog "calcEquipmentStates: fanFeedbackSwitch = ${state.fanFeedback}"
+        state.fanFeedback ? fanFeedbackSwitch.on() : fanFeedbackSwitch.off()
+    }
+}
+
+def execControlLoop()
+{     
+    infolog "execControlLoop:"
+    debuglog "execControlLoop: pv = ${state.pv}"
+
+    // Compute excursion states
         
-        if (location.mode == "Away") {
-            state.excursionLow = (state.pv < (state.loopSptLow + loopSptOffsetAway))
-            state.excursionHigh = (state.pv > (state.loopSptHigh + loopSptOffsetAway))
-        } else {
-            state.excursionLow = (state.pv < state.loopSptLow)
-            state.excursionHigh = (state.pv > state.loopSptHigh)
-        }
+    state.excursionLow = (state.pv < state.loopSptLow)
+    state.excursionHigh = (state.pv > state.loopSptHigh)
             
-        // Compute new controller state
-        if (state.excursionLow) {
-            turnOffOutput()
-            updateAppLabel("Below Low Limit - Output Off", "green", state.pvStr)
-            debuglog "execControlLoop: pv ${state.pv} < spt ${state.loopSptLow} ->excursionLow, turnOffOutput"
-        } else if (state.excursionHigh) {
-            updateAppLabel("Above High Limit - Output On", "red", state.pvStr)
-            debuglog "execControlLoop: pv ${state.pv} > spt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
-            turnOnOutput()
-        } else {
-            state.co ? updateAppLabel("Within Limits - Output On", "green", state.pvStr) : updateAppLabel("Within Limits - Output Off", "green", state.pvStr)
-            debuglog "execControlLoop: within limits, controller output unchanged (${state.co})"
-        }
-    } else {
-        updateAppLabel("Controller Disabled in current Mode - Output Off", "red")
-        debuglog "execControlLoop: controller disabled in current Mode, calling turnOffOutput"
+    // Compute new controller state
+    if (state.excursionLow && state.offPermissive) {
+        debuglog "execControlLoop: pv ${state.pv} < spt ${state.loopSptLow} ->excursionLow, offPermissive = ${state.offPermissive}, turnOffOutput"
+        state.co = false
         turnOffOutput()
+        updateAppLabel("Below Low Limit - Output Off", "green", state.pvStr)
+
+    } else if (state.excursionHigh) {
+        debuglog "execControlLoop: pv ${state.pv} > spt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
+        updateAppLabel("Above High Limit - Output On", "red", state.pvStr)
+        state.co = true
+        turnOnOutput()
+    } else {
+        debuglog "execControlLoop: within limits, controller output unchanged (${state.co})"
+        state.co ? updateAppLabel("Within Limits - Output On", "green", state.pvStr) : updateAppLabel("Within Limits - Output Off", "green", state.pvStr)
     }
 }
 
 def turnOnOutput()
 {
+    infolog "turnOnOutput:"
+    debuglog "turnOnOutput: controller output = ${state.co}"
     //
     // Turn on sequence:
     //  1) Start fan (if configured)
-    //  2) Wait onDelay
+    //  2) Wait onDelay seconds
     //  3) Start compressor
+    //  4) Set tstat fan mode to on (if configured)
+    //  5) Set offPermissive to false 
     //
-    debuglog "turnOnOutput:"
+
     if (!state.humFeedback) {
         debuglog "turnOnOutput: humFeedback is ${state.humFeedback}, on sequence started"
         if (fanControlSwitch != null) {
-            debuglog "turnOnOutput: onDelay = ${onDelay}, fanControlSwitch = ${fanControlSwitch}"
+            debuglog "turnOnOutput: onDelay = ${onDelay}, fanControlSwitch = ${fanControlSwitch}, minOnTime = ${minOnTime}"
             fanSwitchOn()
             runIn(onDelay, 'humSwitchOn')
         } else {    
             humSwitchOn()
         }
+        if (tstatFanControl) {
+            debuglog "turnOnOutput: tstatFanControl = ${tstatFanControl}, setting tstat fan to on"
+            tstatFanOn()
+        }
+        state.offPermissive = false
+        runIn(60 * minOnTime, 'resetOffPermissive')
+        debuglog "offPermissive set to false, will reset in ${minOnTime} minutes"
     } else {
-        debuglog "turnOnOutput: humFeedback is ${state.humFeedback}"
+        debuglog "turnOnOutput: humFeedback is ${state.humFeedback}, output already on"
     }
+
 }
 
 def turnOffOutput()
 {
+    infolog "turnOffOutput:"
+    debuglog "turnOffOutput: controller output = ${state.co}"
     //
     // Turn off sequence:
     //  1) Stop compressor
-    //  2) Wait onDelay
-    //  3) Stop fan (if configured) 
+    //  2) Wait onDelay seconds
+    //  3) Stop fan (if configured)
+    //  4) Set tstat fan mode to circ (if configured), after tstatFanResetDelay minutes
     //
-    debuglog "turnOffOutput:"
+
     if (state.humFeedback) {
-        debuglog "turnOffOutput: humFeedback is ${state.humFeedback}, off sequence started, calling humSwitchOff"
+        debuglog "turnOffOutput: humFeedback is ${state.humFeedback}, off sequence started"
         humSwitchOff()
         if (fanControlSwitch != null) {
             debuglog "turnOffOutput: onDelay = ${onDelay}, fanControlSwitch = ${fanControlSwitch}"
             runIn(onDelay, 'fanSwitchOff')
         }
+        if (tstatFanControl) {
+            debuglog "turnOffOutput: tstatFanControl = ${tstatFanControl}, setting tstat fan to circ after ${tstatFanResetDelay} seconds"
+            runIn(tstatFanResetDelay, 'tstatFanCirc')
+        }
     } else {
         debuglog "turnOffOutput: humFeedback is ${state.humFeedback}, output already off"
     }
+
 }
 
 def humSwitchOn() {
@@ -409,6 +356,13 @@ def tstatFanOn() {
 def tstatFanCirc() {
     debuglog "tstatFanMode: circulate"
     tstat.fanCirculate()
+}
+
+def resetOffPermissive() {
+    debuglog "resetOffPermissive:"
+    debuglog "offPermissive set to true, controller can now transition to off state"
+    state.offPermissive = true
+    execControlLoop()
 }
 
 //
