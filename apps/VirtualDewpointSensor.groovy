@@ -94,9 +94,13 @@ def calcDewpoint() {
     // Compute new Td from current T and %RH
     def currentTemp = tempSensor.currentValue("temperature")
     def currentHumid = humidSensor.currentValue("humidity")
-    def tempC = f2c(currentTemp)
+
+    def tempC = (location.temperatureScale == "F") ? f2c(currentTemp) : currentTemp
+    
     def dewpointC = dpC(tempC, currentHumid)
-    def result = c2f(dewpointC)
+    
+    def result = (location.temperatureScale == "F") ? c2f(dewpointC) : dewpointC
+    
     def newDewpoint = result.toDouble().round(1)
     
     // log.info "In calcDewpoint, prevDewpoint=${prevDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, newDewpoint=${newDewpoint}" 
@@ -112,7 +116,7 @@ def calcDewpoint() {
         dewpointDev.setTemperature(smoothedDewpoint)
         
         // Update the app label for fancy-ness.
-        def dptStr = String.format("%.1f", smoothedDewpoint) + "°F"
+        def dptStr = String.format("%.1f", smoothedDewpoint) + "°" + location.temperatureScale
         dptStr = dptStr.trim()
         updateAppLabel("${dptStr}", "green")
         
@@ -121,7 +125,7 @@ def calcDewpoint() {
 		state.clamped = true
         
         // Update the app label for fancy-ness.
-        def dptStr = String.format("%.1f", newDewpoint) + "°F"
+        def dptStr = String.format("%.1f", newDewpoint) + "°" + location.temperatureScale
         dptStr = dptStr.trim()
         if (result < lowClamp) {
             log.warn "Dewpoint clamped: calculated value ${dptStr} below ${lowClamp}"
