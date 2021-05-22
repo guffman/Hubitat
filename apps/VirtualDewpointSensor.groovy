@@ -10,6 +10,7 @@
 *    2020-09-15  Guffman        Original Creation
 *    2020-10-25  Guffman        Added clamping due to some random wild readings from the humidity sensors.
 *    2021-02-04  Guffman        Revised initialize code, added smoothing feature. 
+*.   2021-05-21  Dlmcpaul	Added support for Celsius temperature scale
 *
 */
 
