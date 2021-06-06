@@ -22,7 +22,7 @@
 *
 */
 
-def version() {"v0.2"}
+def version() {"v0.3"}
 
 definition(
     name: "Smart Dewpoint Controller",
