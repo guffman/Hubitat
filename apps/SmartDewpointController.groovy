@@ -17,7 +17,7 @@
 *    2020-10-23  Marc Chevis    Revised Smart Humidistat app to control dewpoint
 *    2021-05-21  Marc Chevis    Removed unused features
 *    2021-05-29  Marc Chevis    Added timed inhibit feature to prevent dehumidifer running when A/C is in cooling operating state.
-*    2021-06-05  Marc Chevis    Cleaned up some logging inconsistencies
+*    2021-06-05  Marc Chevis    Cleaned up some logging inconsistencies, added elapsed time-in-state features for thermostat
 *
 *
 */
@@ -78,6 +78,7 @@ def pageConfig() {
             } else {
                 tstatFanResetDelay = 0
             }
+            input "coolingTimeDevice", "capability.sensor", title: "Stopwatch Sensor to Log Cooling Cycle Durations:", required: false, multiple: false
 		}
 		section("Logging")
 		{                       
@@ -150,15 +151,20 @@ def initialize()
     state.tstatState = tstat.currentValue("thermostatOperatingState")
     state.prevTstatState = state.tstatState
     subscribe(tstat, "thermostatOperatingState", tstatStateHandler)
-
-
     
-    // Reset the counter for how long the thermostat has been in cooling state since last transiton from idle. Use this as the basis for
-    // the inhibitTimeout calculation.
-    state.coolingStartTime = now()
-    state.coolingStopTime = state.coolingStartTime
-    state.secondsInCooling = 0
-    state.secondsInIdle = 0
+    // Initialize the counters for how long the thermostat has been in cooling state since last transiton from idle. Preserve
+    // the timestamps etc. if this is an updated() vs created() invocation. Use this as the basis for the inhibitTimeout calculation
+    // that runs every minute.
+    if (state.coolingStartTime == null) {
+        debuglog "initialize: thermostat state timestamps are null - initializing time-in-state variables"
+        state.coolingStartTime = now()
+        state.coolingStopTime = state.coolingStartTime
+        state.secondsInCooling = 0
+        state.secondsInIdle = 0
+    } else {
+        debuglog "initialize: thermostat state timestamps exist - time-in-state variables unchanged"
+    }
+    calcTstatStateTimers()
     runEvery1Minute("calcTstatStateTimers")
     
     state.power = powerMeter.currentValue("power")    
@@ -236,6 +242,7 @@ def tstatModeHandler(evt)
 
 def tstatStateHandler(evt) {   
     infolog "tstatStateHandler: Thermostat operating state changed: ${evt.value}"
+    
     state.tstatState = evt.value
         
     if (state.tstatState == "cooling") {
@@ -243,6 +250,9 @@ def tstatStateHandler(evt) {
             // Idle->Cooling transition, capture the start time
             state.coolingStartTime = now()
             state.prevTstatState = state.tstatState
+            
+            // Start the stopwatch device if configured
+            if (coolingTimeDevice != null) startCoolingTimeDevice()
         }
     }
     
@@ -251,6 +261,9 @@ def tstatStateHandler(evt) {
             // Cooling->Idle transition, capture the end time
             state.coolingStopTime = now()
             state.prevTstatState = state.tstatState
+            
+            // Stop the stopwatch device if configured
+            if (coolingTimeDevice != null) stopCoolingTimeDevice()
         }
     }
 }
@@ -260,16 +273,6 @@ def tstatFanModeHandler(evt)
     infolog "tstatFanModeHandler: Thermostat fan mode changed: new mode ${evt.value}, previous mode ${state.prevTstatFanMode}"
     state.prevTstatFanMode = state.tstatFanMode
     state.tstatFanMode = evt.value
-
-    // Force tstat fan state based on controller state and tstat state. The Thermostat Controller app doesn't provide for a Circ mode,
-    // so we need to force the issue. 
-    // tstat idle + dehum off -> tstat fan Circ
-    // tstat idle + dehum on  -> tstat fan On
-    
-    //if (tstatFanControl && state.tstatFanMode == "auto") {
-    //    state.co ? tstatFanOn() : tstatFanCirc()
-    //   debuglog "tstatFanModeHandler: Forcing thermostat fan mode"
-    //}
 }
 
 def calcSetpoints() 
@@ -280,7 +283,7 @@ def calcSetpoints()
     spt = loopSpt.currentValue("temperature").toFloat()
     state.loopSptLow = (spt - (loopDband / 2.0))
     state.loopSptHigh = (spt + (loopDband / 2.0))
-    infolog "calcSetpoints: setpoint=${spt}, loopDband=${loopDband}, loopSptLow=${state.loopSptLow}, loopSptHigh=${state.loopSptHigh}"
+    infolog "calcSetpoints: setpoint = ${spt}, loopDband = ${loopDband}, loopSptLow = ${state.loopSptLow}, loopSptHigh = ${state.loopSptHigh}"
 }
 
 def calcEquipmentStates() 
@@ -289,7 +292,7 @@ def calcEquipmentStates()
     debuglog "calcEquipmentStates: controller output = ${state.co}"
     
     pwr = state.power.toDouble()
-    debuglog "calcEquipmentStates: pwr=${pwr}"
+    debuglog "calcEquipmentStates: pwr = ${pwr}"
     
     state.humFeedback = (pwr > humFeedbackPwrLimit) ? true : false
     debuglog "calcEquipmentStates: humFeedbackSwitch = ${state.humFeedback}"
@@ -311,14 +314,12 @@ def calcTstatStateTimers()
     if (state.tstatState == "cooling") {
         state.secondsInCooling = (int) ((currentTime - state.coolingStartTime) / 1000)
         minsCooling = (state.secondsInCooling / 60).toDouble().round(1)
-        state.secondsInIdle = 0
         debuglog "calcTstatStateTimers: tstatState = cooling for ${minsCooling} min"
     }
     
     if (state.tstatState == "idle") {
         state.secondsInIdle = (int) ((currentTime - state.coolingStopTime) / 1000)
         minsIdle = (state.secondsInIdle / 60).toDouble().round(1)
-        state.secondsInCooling = 0
         debuglog "calcTstatStateTimers: tstatState = idle for ${minsIdle} min"
     }
     
@@ -349,21 +350,21 @@ def execControlLoop()
     // Compute new controller state
     if (state.inhibited && state.offPermissive) {
         state.co = false
-        debuglog "execControlLoop: pv ${state.pv}, inhibited = ${state.inhibited}, state.co = ${state.co}, turnOffOutput"
+        debuglog "execControlLoop: pv = ${state.pv}, inhibited = ${state.inhibited}, state.co = ${state.co}, turnOffOutput"
         updateAppLabel("Inhibited - Output Off", "orange")
         turnOffOutput()
     } else if (state.excursionLow && state.offPermissive) {
-        debuglog "execControlLoop: pv ${state.pv} < spt ${state.loopSptLow} ->excursionLow, offPermissive = ${state.offPermissive}, turnOffOutput"
+        debuglog "execControlLoop: pv ${state.pv} < loSpt ${state.loopSptLow} -> excursionLow, offPermissive = ${state.offPermissive}, turnOffOutput"
         state.co = false
         updateAppLabel("Below Low Limit - Output Off", "red", state.pvStr)
         turnOffOutput()
     } else if (state.excursionHigh) {
-        debuglog "execControlLoop: pv ${state.pv} > spt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
+        debuglog "execControlLoop: pv ${state.pv} > hiSpt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
         state.co = true
         updateAppLabel("Above High Limit - Output On", "green", state.pvStr)
         turnOnOutput()
     } else {
-        debuglog "execControlLoop: within limits, controller output unchanged (${state.co})"
+        debuglog "execControlLoop: loSpt ${state.loopSptLow} < pv ${state.pv} <  hiSpt ${state.loopSptHigh} -> within limits, controller output unchanged (${state.co})"
         state.co ? updateAppLabel("Within Limits - Output On", "green", state.pvStr) : updateAppLabel("Within Limits - Output Off", "red", state.pvStr)
     }
 }
@@ -488,6 +489,16 @@ def resetOffPermissive() {
     debuglog "resetOffPermissive: offPermissive set to true, controller can now transition to off state"
     state.offPermissive = true
     execControlLoop()
+}
+
+def startCoolingTimeDevice() {
+    debuglog "coolingTimeDevice: start"
+    coolingTimeDevice.start()
+}
+
+def stopCoolingTimeDevice() {
+    debuglog "coolingTimeDevice: stop"
+    coolingTimeDevice.stop()
 }
 
 //
