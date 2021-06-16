@@ -23,7 +23,7 @@ definition(
 )
 
 preferences {
-    page(name: "pageConfig") // Doing it this way elimiates the default app name/mode options.
+    page(name: "pageConfig") // Doing it this way eliminates the default app name/mode options.
 }
 def pageConfig()
 {
