@@ -5,9 +5,7 @@ definition(
     description: "Average some humidity sensors",
     category: "Convenience",
     iconUrl: "",
-    iconX2Url: "",
-    importUrl: ""
-)
+    iconX2Url: "")
 
 preferences {
 	page(name: "mainPage")
@@ -16,8 +14,11 @@ preferences {
 def mainPage() {
 	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
 		section {
-			input "thisName", "text", title: "Name this humidity averager", submitOnChange: true
-			if(thisName) app.updateLabel("$thisName")
+			input "thisName", "text", title: "Name this humidity averager", defaultValue: "Humidity Averager", submitOnChange: true
+            if(thisName) {
+                app.updateLabel("$thisName")
+                state.label = thisName
+            }
 			input "humidSensors", "capability.relativeHumidityMeasurement", title: "Select Humidity Sensors", submitOnChange: true, required: true, multiple: true
 			paragraph "Enter weight factors and offsets"
 			humidSensors.each {
@@ -25,9 +26,9 @@ def mainPage() {
 				input "offset$it.id", "decimal", title: "$it Offset", defaultValue: 0.0, submitOnChange: true, range: "*..*", width: 3
 			}
 			input "useRun", "number", title: "Compute running average over this many sensor events:", defaultValue: 1, submitOnChange: true
-			input "lowClamp", "decimal", title: "Humidity clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
-            input "highClamp", "decimal", title: "Humidity clamp value high:", defaultValue: 70.0, required: true, submitOnChange: false
-            input "deltaClamp", "decimal", title: "Humidity clamp value delta:", defaultValue: 2.0, required: true, submitOnChange: false            
+			input "lowClamp", "decimal", title: "Humidity sensor clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
+            input "highClamp", "decimal", title: "Humidity sensor clamp value high:", defaultValue: 70.0, required: true, submitOnChange: false
+            input "deltaClamp", "decimal", title: "Humidity sensor clamp value delta:", defaultValue: 2.0, required: true, submitOnChange: false            
 
 			if(humidSensors) paragraph "Current sensor average is ${averageHumid()}%"
 			if(useRun > 1) {
@@ -52,24 +53,21 @@ def initialize() {
 	if(!averageDev) averageDev = addChildDevice("hubitat", "Virtual Humidity Sensor", "AverageHumid_${app.id}", null, [label: thisName, name: thisName])
 	averageDev.setHumidity(averageHumid())
 	subscribe(humidSensors, "humidity", handler)
+    state.label = thisName
 }
 
 def initRun() {
 	def humid = averageHumid()
-//	if(!state.run) {
-		state.run = []
-		for(int i = 0; i < useRun; i++) state.run += humid
-//	}
-//    log.info "initRun: state.run = ${state.run}"
+	state.run = []
+	for(int i = 0; i < useRun; i++) state.run += humid
 }
 
 def averageHumid(run = 1) {
 	def total = 0
 	def n = 0
+    def avg = 0.0
 	def averageDev = getChildDevice("AverageHumid_${app.id}")
 	def currentHumid = averageDev.currentValue("humidity")
-	if (!lowClamp) lowClamp = 0.0
-    if (!highClamp) highClamp = 100.0
 	humidSensors.each {
         if (it.currentHumidity <=lowClamp || it.currentHumidity >= highClamp) log.warn "Humidity sensor ${it.label} reading ${it.currentHumidity} out of clamp range ${lowClamp}-${highClamp}"
 		def offset = settings["offset$it.id"] != null ? settings["offset$it.id"] : 0
@@ -83,50 +81,43 @@ def averageHumid(run = 1) {
 		result = total / run
 	}
     def deltaResult = Math.abs(currentHumid - result)
+    
+    // Sensor average validity tests
+    avg = result.toDouble().round(1)
+    avgStr = String.format("%.1f", avg) + "%"
+    avgStr = avgStr.trim()
+
 	if ((result > lowClamp) && (result < highClamp) && (deltaResult < deltaClamp)) {
         state.clamped = false
-        return result.toDouble().round(1)
-    } else {
-        state.clamped = true
-        log.warn "Humidity deltaResult=${deltaResult}"
-        log.warn "Humidity average clamped: extraneous calculated value ${result}"
-        return currentHumid
+        updateAppLabel(avgStr, "green")
+        return avg
     }
     
     state.clamped = true
-    if (result < lowClamp) {
-        log.warn "Humidity average clamped: calculated value ${result} below ${lowClamp}"
-        return currentHumid
-    } else if (result > highClamp) {
-        log.warn "Humidity average clamped: calculated value ${result} above ${highClamp}"
-        return currentHumid
-    } else if (Math.abs(currentHumid - result) > deltaClamp) {
-        log.warn "Humidity average clamped: calculated value ${result} changed more than ${deltaClamp}"
-        return currentHumid
-    } else {
-        state.clamped = false
-        return result.toDouble().round(1)
+    if (result <= lowClamp) {
+        log.warn "Humidity average clamped: calculated value ${avgStr} below ${lowClamp}"
+        updateAppLabel("Below Low Limit - Clamped", "orange", avgStr)
+    } else if (result >= highClamp) {
+        log.warn "Humidity average clamped: calculated value ${avgStr} above ${highClamp}"
+        updateAppLabel("Above High Limit - Clamped", "orange", avgStr)
+    } else if (Math.abs(currentHumid - result) >= deltaClamp) {
+        log.warn "Humidity average clamped: calculated value ${avgStr} changed more than ${deltaClamp}"
+        updateAppLabel("Above Delta Limit - Clamped", "orange", avgStr)
     }
+    return currentHumid
 }
 
 def handler(evt) {
 	def averageDev = getChildDevice("AverageHumid_${app.id}")
 	def avg = averageHumid()
-    def avgStr = ""
 	if(useRun > 1) {
-        //log.info "Event change before: state.run = ${state.run}"
 		state.run = state.run.drop(1) + avg
-        //log.info "Event change after: state.run = ${state.run}"
 		avg = averageHumid(useRun)
 	}
 	averageDev.setHumidity(avg)
-    avgStr = String.format("%.1f", avg) + "%"
-    avgStr = avgStr.trim()
-	//log.info "Average sensor humidity = ${averageHumid()}°" + (useRun > 1 ? "    Running average is $avg%" : "")
-    state.clamped ? updateAppLabel("Clamped", "orange", "${avgStr},") : updateAppLabel("${avgStr}", "green")
 }
 
-def updateAppLabel(textStr, textColor, textPrefix = '') {
-  def str = (textPrefix = null) ? """<span style='color:$textColor'> ($textPrefix $textStr)</span>""" : """<span style='color:$textColor'> ($textStr)</span>"""
-    app.updateLabel(thisName + str)
+def updateAppLabel(textStr, textColor, def textPrefix=null) {
+    def str = (textPrefix != null) ? """<span style='color:$textColor'> ($textPrefix $textStr)</span>""" : """<span style='color:$textColor'> ($textStr)</span>"""
+    app.updateLabel(state.label + str)
 }
