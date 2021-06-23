@@ -17,7 +17,7 @@
 *    2020-10-23  Marc Chevis    Revised Smart Humidistat app to control dewpoint
 *    2021-05-21  Marc Chevis    Removed unused features
 *    2021-05-29  Marc Chevis    Added timed inhibit feature to prevent dehumidifer running when A/C is in cooling operating state.
-*    2021-06-05  Marc Chevis    Cleaned up some logging inconsistencies, added elapsed time-in-state features for thermostat
+*    2021-06-05  Marc Chevis    Cleaned up some logging inconsistencies, added elapsed time-in-state calcs for thermostat
 *
 *
 */
@@ -78,7 +78,6 @@ def pageConfig() {
             } else {
                 tstatFanResetDelay = 0
             }
-            input "coolingTimeDevice", "capability.sensor", title: "Stopwatch Sensor to Log Cooling Cycle Durations:", required: false, multiple: false
 		}
 		section("Logging")
 		{                       
@@ -250,9 +249,6 @@ def tstatStateHandler(evt) {
             // Idle->Cooling transition, capture the start time
             state.coolingStartTime = now()
             state.prevTstatState = state.tstatState
-            
-            // Start the stopwatch device if configured
-            if (coolingTimeDevice != null) startCoolingTimeDevice()
         }
     }
     
@@ -261,9 +257,6 @@ def tstatStateHandler(evt) {
             // Cooling->Idle transition, capture the end time
             state.coolingStopTime = now()
             state.prevTstatState = state.tstatState
-            
-            // Stop the stopwatch device if configured
-            if (coolingTimeDevice != null) stopCoolingTimeDevice()
         }
     }
 }
@@ -489,16 +482,6 @@ def resetOffPermissive() {
     debuglog "resetOffPermissive: offPermissive set to true, controller can now transition to off state"
     state.offPermissive = true
     execControlLoop()
-}
-
-def startCoolingTimeDevice() {
-    debuglog "coolingTimeDevice: start"
-    coolingTimeDevice.start()
-}
-
-def stopCoolingTimeDevice() {
-    debuglog "coolingTimeDevice: stop"
-    coolingTimeDevice.stop()
 }
 
 //
