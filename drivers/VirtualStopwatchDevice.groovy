@@ -11,6 +11,10 @@
  *      Button 3 pushed - pauses the running stopwatch
  *      Button 4 pushed - cancels the running stopwatch
  *
+ *  Switch capabilities are added for convenience:
+ *      On  - starts the stopwatch
+ *      Off - stops the stopwatch
+ *
  *  Pause is treated as a suspension of elapsed time; while paused there is no additive contribution to elapsed time. After a subsequent
  *  start command is issued, the stopwatch resumes accruing elapsed time. After a stop command is issued following a pause, the session is
  *  ended normally, with the accrued elapsed time updated.
@@ -35,13 +39,14 @@
  *    ----        ---            ----
  *    2021-06-08  Marc Chevis    Original
  *    2021-06-12  Marc Chevis    Added attribute updates while timer is running, button capability
- *    2021-06-23  Marc Chevis    Added some statistics attributes
+ *    2021-06-23  Marc Chevis    Added some statistics attributes, switch capability
  * 
  */
 
 metadata {
     definition (name: "Virtual Stopwatch Device", namespace: "guffman", author: "Guffman", importUrl: "") {
         capability "PushableButton"
+        capability "Switch"
         capability "TimedSession"
         
         // These attributes are used for each stopwatch timed event occurence
@@ -90,6 +95,7 @@ def start() {
         state.elapsedPauseTimeMs = 0
         state.wasPaused = false
         sendEvent(name: "sessionStatus", value: "running", descriptionText: "Stopwatch started")
+        sendEvent(name: "switch", value: "on", descriptionText: "Stopwatch started")
         runInMillis(100, 'updateStopwatch')
         def interval = updateInterval.toInteger()
         
@@ -134,6 +140,14 @@ def push(button) {
     }
 }
 
+def on() {
+    start()
+}
+
+def off() {
+    stop()
+}
+
 def stop() {
     
     // stop() calculates the elapsed time, then sends an event for stopped and the session timers. Add the data map of timestamps for convenience.
@@ -143,6 +157,7 @@ def stop() {
         state.stopTime = new Date()
         state.stopTimeMs = now()
         sendEvent(name: "sessionStatus", value: "stopped", descriptionText: "Stopwatch stopped")
+        sendEvent(name: "switch", value: "off", descriptionText: "Stopwatch stopped")
     
         et = calcDeltaTime()
     
@@ -156,7 +171,7 @@ def stop() {
         tot_cyc = device.currentValue("totalCycles") + 1
         sendEvent(name: "totalCycles", value: tot_cyc, descriptionText: "Total cycles updated")
         
-        cyc_rate = calcCycleRate()
+        cyc_rate = calcCycleRate(tot_cyc)
         sendEvent(name: "avgCycleRate", value: cyc_rate, descriptionText: "Average cycle rate updated", unit: "per ${cycleRateUnit}")
         
         tot_et = (device.currentValue("totalElapsedTime") + et).round(4)
@@ -182,6 +197,7 @@ def cancel() {
     if ((device.currentValue("sessionStatus") == "running") || (device.currentValue("sessionStatus") == "paused")) {
         logdebug("cancel: stopwatch entered cancelled state")
         sendEvent(name: "sessionStatus", value: "cancelled", descriptionText: "Stopwatch cancelled")
+        sendEvent(name: "switch", value: "off", descriptionText: "Stopwatch cancelled")
         unschedule()
     }
 }
@@ -237,13 +253,12 @@ def calcDeltaTime() {
     return et
 }
 
-def calcCycleRate() {
+def calcCycleRate(cycles) {
     
     // Compute elapsed time and cycle rate since last reset() command.
 
     nowMs = now()
     cyc_rate = 0.0
-    def cycles = device.currentValue("totalCycles").toDouble()
     def deltat = (nowMs - state.statsStartTimeMs).toDouble()
     
     switch(cycleRateUnit)
@@ -277,6 +292,7 @@ def installed() {
     state.wasPaused = false
     
     sendEvent(name: "sessionStatus", value: "stopped", descriptionText: "Stopwatch stopped")
+    sendEvent(name: "switch", value: "off", descriptionText: "Stopwatch stopped")
     reset()
 }
 
@@ -284,20 +300,19 @@ def initialize() {
 }
 
 def updated() {
+    
     sendEvent(name: "units", value: timeUnit, descriptionText: "Stopwatch time units changed to ${timeUnit}")
-    if (!state.statsStartTime) state.statsStartTime = new Date()
-    if (!state.statsStartTimeMs) state.statsStartTimeMs = now()
-    
-    //
-    
-    sendEvent(name: "totalCycles", value: 0, descriptionText: "Total cycles updated")
-    sendEvent(name: "avgCycleRate", value: 0, descriptionText: "Average cycle rate updated", unit: "per ${cycleRateUnit}")
-    sendEvent(name: "totalElapsedTime", value: 0, descriptionText: "Total elapsed time updated", unit: timeUnit)
-    sendEvent(name: "maxElapsedTime", value: 0, descriptionText: "Maximum elapsed time updated", unit: timeUnit)
-    sendEvent(name: "minElapsedTime", value: 0, descriptionText: "Minimum elapsed time updated", unit: timeUnit)
-    
-    //
-    
+
+    //sendEvent(name: "sessionStatus", value: "stopped", descriptionText: "Stopwatch stopped")
+    //sendEvent(name: "switch", value: "on", descriptionText: "Stopwatch started")
+    //sendEvent(name: "switch", value: "off", descriptionText: "Stopwatch stopped")
+    //sendEvent(name: "units", value: timeUnit, descriptionText: "Stopwatch time units changed to ${timeUnit}")
+    //sendEvent(name: "totalCycles", value: 0, descriptionText: "Total cycles updated")
+    //sendEvent(name: "avgCycleRate", value: 0, descriptionText: "Average cycle rate updated", unit: "per ${cycleRateUnit}")
+    //sendEvent(name: "totalElapsedTime", value: 0, descriptionText: "Total elapsed time updated", unit: timeUnit)
+    //sendEvent(name: "maxElapsedTime", value: 0, descriptionText: "Maximum elapsed time updated", unit: timeUnit)
+    //sendEvent(name: "minElapsedTime", value: 0, descriptionText: "Minimum elapsed time updated", unit: timeUnit)
+ 
 }
 
 private logdebug(message) {
