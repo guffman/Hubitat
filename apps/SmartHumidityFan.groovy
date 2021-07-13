@@ -97,6 +97,9 @@ def initialize()
 	state.TurnOffLaterStarted = false
     subscribe(HumiditySensor, "humidity", HumidityHandler)
     subscribe(FanSwitch, "switch", FanSwitchHandler)
+    if (DehumSwitch) {
+        (FanSwitch.currentValue("switch") == "on") ? DehumidSwitch.on() : DehumSwitch.off()
+    }
 	subscribe(location, "mode", modeChangeHandler)
 	state.modeDisable = false
     if (autoDisableSwitch) {
@@ -212,7 +215,6 @@ def HumidityHandler(evt)
 		state.AutomaticallyTurnedOnAt = new Date().format("yyyy-MM-dd HH:mm")
 		infolog "HumidityHandler:Turn On Fan due to humidity increase"
 		TurnOnFanSwitch()
-		if(DehumidSwitch) {DehumidSwitch.on()}
 		updateAppLabel("On - Humidity High/Increasing at ${state.AutomaticallyTurnedOnAt}", "green")
         state.StartingHumidity = state.lastHumidity
         state.HighestHumidity = state.currentHumidity    
@@ -258,6 +260,9 @@ def FanSwitchHandler(evt)
 				{
 					debuglog "FanSwitchHandler::Fan Off"
 					TurnOffFanSwitch()
+                    if(DehumidSwitch) {
+                        if (DehumidSwitch.currentValue("switch") == "off") {DehumidSwitch.on()}
+                    }
 				}
 					else
 				{
@@ -271,7 +276,9 @@ def FanSwitchHandler(evt)
 			debuglog "FanSwitchHandler::Switch turned off"
 			state.AutomaticallyTurnedOn = false
 			state.TurnOffLaterStarted = false
-		    if(DehumidSwitch) {DehumidSwitch.off()}
+		    if(DehumidSwitch) {
+                if (DehumidSwitch.currentValue("switch") == "on") {DehumidSwitch.off()}
+            }
             updateAppLabel("Off", "red")
 			break
     }
@@ -286,7 +293,6 @@ def TurnOffFanSwitchCheckHumidity()
 		if(state.currentHumidity > state.targetHumidity)
         {
 			debuglog "TurnOffFanSwitchCheckHumidity: Didn't turn off fan because humidity rate is ${state.HumidityChangeRate}"
-			if(DehumidSwitch) {DehumidSwitch.on()}
 			state.AutomaticallyTurnedOn = true
 			state.AutomaticallyTurnedOnAt = now()
 			state.TurnOffLaterStarted = false
@@ -315,13 +321,10 @@ def TurnOffFanSwitch()
     {
         infolog "TurnOffFanSwitch:Fan Off"
         FanSwitch.off()
-		if(DehumidSwitch) {DehumidSwitch.off()}
         state.AutomaticallyTurnedOn = false
         state.TurnOffLaterStarted = false
         updateAppLabel("Off", "red")
     }
-	
-
 }
 
 def CheckThreshold(evt)
