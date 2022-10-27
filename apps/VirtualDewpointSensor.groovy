@@ -1,7 +1,8 @@
 /*
 * This app is derived from the community 'Average Temperatures' app written by Bruce Ravenel.
 * Dewpoint calculation algorithm thanks to Ashok Aiyar in the Hubitiat Community.
-* Use a periodic calculation interval rather than event-driven, due to the irregular update timing from the sensors. The smoothing works well with a continuous time series.
+* Ability to use a periodic calculation interval rather than event-driven, due to the irregular update timing from the sensors.
+* The smoothing works well with a continuous time series.
 *
 *  Change History:
 *
@@ -11,6 +12,7 @@
 *    2020-10-25  Guffman        Added clamping due to some random wild readings from the humidity sensors.
 *    2021-02-04  Guffman        Revised initialize code, added smoothing feature. 
 *    2021-05-21  Dlmcpaul       Added support for Celsius temperature scale
+*    2022-10-27  jkister        Allow periodic and/or event-driven based schedule
 *
 */
 
@@ -41,8 +43,21 @@ def mainPage() {
             input "lowClamp", "decimal", title: "Dewpoint clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
             input "highClamp", "decimal", title: "Dewpoint clamp value high:", defaultValue: 70.0, required: true, submitOnChange: false
             input "alpha", "decimal", title: "Exponential smoothing filter factor (1.0 = no smoothing, 0.1 = maximum smoothing):", defaultValue: 1.0, required: true, range: "0.1..1.0", submitOnChange: false
-            input "calcInterval", "enum", title: "Calculation update interval", required: true, options: ["1 min", "5 min", "10 min", "15 min"], defaultValue: "5 min"
+            input "useSubscribe", "bool", title: "Update value when new data is received from the sensor", defaultValue: false, submitOnChange: true
+            input "usePeriodic",  "bool", title: "Update value on a schedule", defaultValue: true, submitOnChange: true
+
+            if(usePeriodic){
+                input "calcInterval", "enum", title: "Calculation update interval", required: true, options: ["1 min", "5 min", "10 min", "15 min"], defaultValue: "5 min"
+            }
+
+            input "enableDebug", "bool", title: "Enable debug logging", defaultValue: false, submitOnChange: true
         }
+    }
+}
+
+def debug (message) {
+    if(enableDebug){
+        log.debug "${message}"
     }
 }
 
@@ -51,6 +66,7 @@ def installed() {
 }
 
 def updated() {
+    unsubscribe()
     unschedule()
     initialize()
 }
@@ -67,31 +83,36 @@ def initialize() {
     }
     
     calcDewpoint()
+
+    if(useSubscribe){
+        debug("subscribing to sensor events")
+        subscribe(tempSensor, "temperature", calcDewpoint)
+        subscribe(humidSensor, "humidity", calcDewpoint)
+    }
     
-    // Schedule updates
-    switch (calcInterval)
-    {
-        case "1 min":
-            runEvery1Minute("calcDewpoint")
-            break
-        case "5 min":
-            runEvery5Minutes("calcDewpoint")
-            break
-        case "10 min":
-            runEvery10Minutes("calcDewpoint")
-            break
-        case "15 min":
-            runEvery15Minutes("calcDewpoint")
-            break
+    if(usePeriodic){
+        // Schedule updates
+        debug("enabling periodic schedule")
+        switch (calcInterval)
+        {
+            case "1 min":
+                runEvery1Minute("calcDewpoint")
+                break
+            case "5 min":
+                runEvery5Minutes("calcDewpoint")
+                break
+            case "10 min":
+                runEvery10Minutes("calcDewpoint")
+                break
+            case "15 min":
+                runEvery15Minutes("calcDewpoint")
+                break
+        }
     }
 }
 
-def calcDewpoint() {
+def calcDewpoint(evt) {
 
-    // Get the prior Td value
-    def dewpointDev = getChildDevice("Dewpoint_${app.id}")
-    def prevDewpoint = dewpointDev.currentValue("temperature")
-    
     // Compute new Td from current T and %RH
     def currentTemp = tempSensor.currentValue("temperature")
     def currentHumid = humidSensor.currentValue("humidity")
@@ -103,8 +124,17 @@ def calcDewpoint() {
     def result = (location.temperatureScale == "F") ? c2f(dewpointC) : dewpointC
     
     def newDewpoint = result.toDouble().round(1)
+
+    // Get the prior Td value
+    def dewpointDev = getChildDevice("Dewpoint_${app.id}")
+    def prevDewpoint = dewpointDev.currentValue("temperature")
+    if(! prevDewpoint){
+        // there is no previous on first run
+        prevDewpoint = newDewpoint
+    }
     
-    // log.info "In calcDewpoint, prevDewpoint=${prevDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, newDewpoint=${newDewpoint}" 
+    debug("In calcDewpoint, prevDewpoint=${prevDewpoint}, currentTemp=${currentTemp}, currentHumid=${currentHumid}, result=${result}, newDewpoint=${newDewpoint}")
+   
     
     // Validity tests 
     if ((result >= lowClamp) && (result <= highClamp)) {
@@ -113,7 +143,7 @@ def calcDewpoint() {
         state.clamped = false
         def smoothedResult = (alpha * newDewpoint) + ((1.0 - alpha) * prevDewpoint)
         def smoothedDewpoint = smoothedResult.toDouble().round(1)
-        // log.info "In calcDewpoint, smoothedResult=$smoothedResult, smoothedDewpoint=$smoothedDewpoint"
+        debug("In calcDewpoint, smoothedResult=$smoothedResult, smoothedDewpoint=$smoothedDewpoint")
         dewpointDev.setTemperature(smoothedDewpoint)
         
         // Update the app label for fancy-ness.
