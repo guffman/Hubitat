@@ -10,7 +10,7 @@
 *    2020-09-15  Guffman        Original Creation
 *    2020-10-25  Guffman        Added clamping due to some random wild readings from the humidity sensors.
 *    2021-02-04  Guffman        Revised initialize code, added smoothing feature. 
-*.   2021-05-21  Dlmcpaul	Added support for Celsius temperature scale
+*    2021-05-21  Dlmcpaul       Added support for Celsius temperature scale
 *
 */
 
@@ -25,40 +25,40 @@ definition(
     iconX2Url: "")
 
 preferences {
-	page(name: "mainPage")
+    page(name: "mainPage")
 }
 
 def mainPage() {
-	dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
-		section {
-			input "thisName", "text", title: "Name this virtual dewpoint sensor", required: true, submitOnChange: true
+    dynamicPage(name: "mainPage", title: " ", install: true, uninstall: true) {
+        section {
+            input "thisName", "text", title: "Name this virtual dewpoint sensor", required: true, submitOnChange: true
             if(thisName) {
                 app.updateLabel("$thisName")
                 state.label = thisName
             }
-			input "tempSensor", "capability.temperatureMeasurement", title: "Select Temperature Sensor", submitOnChange: true, required: true, multiple: false
-			input "humidSensor", "capability.relativeHumidityMeasurement", title: "Select Humidity Sensor", submitOnChange: true, required: true, multiple: false
-			input "lowClamp", "decimal", title: "Dewpoint clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
+            input "tempSensor", "capability.temperatureMeasurement", title: "Select Temperature Sensor", submitOnChange: true, required: true, multiple: false
+            input "humidSensor", "capability.relativeHumidityMeasurement", title: "Select Humidity Sensor", submitOnChange: true, required: true, multiple: false
+            input "lowClamp", "decimal", title: "Dewpoint clamp value low:", defaultValue: 30.0, required: true, submitOnChange: false
             input "highClamp", "decimal", title: "Dewpoint clamp value high:", defaultValue: 70.0, required: true, submitOnChange: false
             input "alpha", "decimal", title: "Exponential smoothing filter factor (1.0 = no smoothing, 0.1 = maximum smoothing):", defaultValue: 1.0, required: true, range: "0.1..1.0", submitOnChange: false
             input "calcInterval", "enum", title: "Calculation update interval", required: true, options: ["1 min", "5 min", "10 min", "15 min"], defaultValue: "5 min"
-		}
-	}
+        }
+    }
 }
 
 def installed() {
-	initialize()
+    initialize()
 }
 
 def updated() {
     unschedule()
-	initialize()
+    initialize()
 }
 
 def initialize() {
     
     // Check if the device exists. If not create it
-	def dewpointDev = getChildDevice("Dewpoint_${app.id}")
+    def dewpointDev = getChildDevice("Dewpoint_${app.id}")
     
     if(!dewpointDev) {
         // Create the virtual temperature sensor, initialize it at the current %RH as a rough first guess
@@ -110,7 +110,7 @@ def calcDewpoint() {
     if ((result >= lowClamp) && (result <= highClamp)) {
         
         // Valid Td value. Compute filter, update the Td device.
-		state.clamped = false
+        state.clamped = false
         def smoothedResult = (alpha * newDewpoint) + ((1.0 - alpha) * prevDewpoint)
         def smoothedDewpoint = smoothedResult.toDouble().round(1)
         // log.info "In calcDewpoint, smoothedResult=$smoothedResult, smoothedDewpoint=$smoothedDewpoint"
@@ -123,7 +123,7 @@ def calcDewpoint() {
         
     } else {
         // Outside clamp limits. Don't update the Td device and don't perform smoothing.
-		state.clamped = true
+        state.clamped = true
         
         // Update the app label for fancy-ness.
         def dptStr = String.format("%.1f", newDewpoint) + "°" + location.temperatureScale
