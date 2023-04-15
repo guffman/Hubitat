@@ -72,8 +72,7 @@ preferences {
         input name: 'ipAddress',
               type: 'text',
               title: 'Device IP',
-              required: true,
-              default_value: '192.168.40.40'
+              required: true
 
         input name: 'repeat',
               title: 'Command Retries',
@@ -99,14 +98,12 @@ preferences {
         input name: 'id',
               title: 'Device ID:',
               type: 'text',
-              required: true,
-              defaultValue: '6053105810521c05cbe7'
+              required: true
 
         input name: 'localKey',
               title: 'Device Local Key:',
               type: 'text',
-              required: true,
-              defaultValue: '96a0f792ef5adef5'
+              required: true
 
         input name: 'logEnable',
               type: 'bool',
