@@ -23,6 +23,8 @@
  *    Date          By         Description
  *    ----------    -------    -----------
  *    04/14/2023    Guffman    Modified for only local communication and for Tuya Air Conditioner protocol.
+ *			       Hacked J. Bradshaw's Tuya RGBW device code and his Tuya protocol library code 
+ *			       to enable network control of a Friedrich Window A/C.
 */
 import com.hubitat.app.DeviceWrapper
 import hubitat.helper.HexUtils
