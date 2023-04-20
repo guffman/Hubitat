@@ -43,7 +43,7 @@ metadata {
     command "beeperEnable"
     command "beeperDisable"
     command "beeperMute"
-    command "close" // to test telnet connect/disconnect code
+//    command "close" // to test telnet connect/disconnect code
     
 	preferences {
         input name: "nutServerHost", type: "text", title: "NUT server hostname/IP address", required: true
