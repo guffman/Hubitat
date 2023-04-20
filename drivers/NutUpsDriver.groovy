@@ -1,16 +1,13 @@
 /**
- *  NUT UPS Driver for Hubitat Elevation v2.0
- * 
- * 10-17-2020 - Modified by Guffman - added beeper NUT commands, some attributes, and removed some bugs.
+ *  NUT UPS Device Type for Hubitat
+ *  Péter Gulyás (@guyeeba)
+ *  Modified by Guffman 04-19-2023
  *
- *  Child driver for the NUT UPS Monitor app.  A child UPS device is created automatically after installing and
- *  configuring the settings in the NUT UPS Monitor application.
- *
- *  Copyright 2019 ritchierich
- *
- *	Credits:
- *	Special thanks to Peter Gulyas (@guyeeba) for the original driver integrating a NUT server with HE
- *  Special thanks to Stephan Hackett for testing this driver
+ *  Usage:
+ *  1. Add this code as a device driver in the Hubitat Drivers Code section
+ *  2. Set NUT server's IP and credentials
+ *  3. ?
+ *  4. Profit!
  * 
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -23,266 +20,210 @@
  *
  */
 
-import groovy.transform.Field
-
-@Field List stateVariables = ["battery.charge", "battery.voltage", "battery.runtime","ups.status", "ups.beeper.status", "input.voltage"]
-
 metadata {
-	definition (name: "NUT UPS Device", namespace: "Guffman", author: "Guffman") {
-		capability "Initialize"
-		capability "Telnet"
-		capability "Refresh"
-		capability "PowerSource"
-		capability "VoltageMeasurement"		
-		capability "Battery"
+	definition (name: "NUT UPS Driver", namespace: "Guffman", author: "Peter GULYAS") {
+	    capability "Initialize"
+        capability "Telnet"
+	    capability "Refresh"
+        capability "PowerSource"
+	    capability "VoltageMeasurement"		
+	    capability "Battery"
         capability "Actuator"
 	}
 	
-	attribute "batteryVoltage", "String"
+	attribute "batteryVoltage", "Number"
 	attribute "deviceAlarm", "String"
-	attribute "batteryRuntime", "String"
+	attribute "batteryRuntime", "Number"
 	attribute "upsStatus", "String"
+    attribute "upsStatusDescription", "String"
     attribute "beeperStatus", "String"
+    attribute "lastUpdated", "string"
 
     command "execCommand", [[name:"nutCommand",type:"STRING", description:"NUT command to execute"]]
     command "beeperEnable"
     command "beeperDisable"
     command "beeperMute"
+    command "close" // to test telnet connect/disconnect code
     
 	preferences {
-        input name: "nutServerHost", type: "text", description: "IP or hostname of NUT server", title: "NUT server hostname", required: true
-        input name: "nutServerPort", type: "number", description: "Port number of NUT server", title: "NUT server port number", defaultValue: 3493, range: "1..65535", required: true
-        input name: "nutUpsName", type: "text", description: "NUT name of UPS", title: "UPS name", required: true
-        input name: "nutPollingInterval", type: "number", description: "Polling interval", title: "Polling interval", defaultValue: 10, range: "1..600"
-		input name: "displayAllVariables", type: "bool", title: "Display all variables?", defaultValue: false, required: false
-		input name: "failedThreshold", type: "number", description: "Pause connection after this number of failed connections", title: "Connection Failure Threshold", defaultValue: 10
-		input name: "isDebugEnabled", type: "bool", title: "Enable debug logging?", defaultValue: false, required: false
-		input name: "pauseUpdates", type: "bool", title: "Pause updates", defaultValue: false, required: false
+        input name: "nutServerHost", type: "text", title: "NUT server hostname/IP address", required: true
+        input name: "nutServerPort", type: "number", title: "NUT server port number", required: true, defaultValue: 3493, range: "1..65535"
+        input name: "upsName", type: "text", title: "NUT server UPS name", required: true, defaultValue: "ups"
+        input name: "nutServerLoginUsername", type: "text", title: "NUT server username", required: true, defaultValue: hubitat
+        input name: "nutServerLoginPassword", type: "password", title: "NUT server password", required: true
+        input name: "nutReconnectDelay", type: "number", title: "Network reconnect delay", defaultValue: 15, range: "1..600"
+        input name: "nutPollingInterval", type: "number", title: "Polling interval", defaultValue: 30, range: "1..600"
+        input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: false
+        input name: "telnetLogEnable", type: "bool", title: "Enable telnet session message logging", defaultValue: false
+        input name: "stateLogEnable", type: "bool", title: "Enable telnet session state logging", defaultValue: false
     }
 }
 
+import groovy.transform.Field
+
 def installed(){
-	if (isDebugEnabled == null) {
-		device.updateSetting("isDebugEnabled",[value:"false",type:"bool"])	
-	}
-	
-	if (pauseUpdates == null) {
-		device.updateSetting("pauseUpdates",[value:"false",type:"bool"])	
-	}
-	
-	if (displayAllVariables == null) {
-		device.updateSetting("displayAllVariables",[value:"false",type:"bool"])	
-	}
-	
-	initialize()
+    log.info("NUT UPS Driver: installed()")
 }
 
 def updated(){
-	unschedule()
-	telnetClose()
-	initialize()
+    log.info("NUT UPS Driver: updated()")
+    def init = false
+    
+    // Only re-initialize the telnet connection if necessary
+    if (getDataValue("nutServerHost") != nutServerHost) { updateDataValue("nutServerHost", nutServerHost) ; init = true }
+    if (getDataValue("nutServerPort") != nutServerPort.toString()) { updateDataValue("nutServerPort", nutServerPort.toString())  ; init = true }
+    if (getDataValue("upsName") != upsName) { updateDataValue("upsName", upsName) ; init = true }
+    if (getDataValue("nutServerLoginUsername") != nutServerLoginUsername) { updateDataValue("nutServerLoginUsername", nutServerLoginUsername) ; init = true }
+    if (getDataValue("nutServerLoginPassword") != nutServerLoginPassword) { updateDataValue("nutServerLoginPassword", nutServerLoginPassword) ; init = true }
+	
+    log.info "updated(): init=${init}"
+    if (init) initialize()
 }
 
 def initialize(){
-	if (failedThreshold == null) {
-		device.updateSetting("failedThreshold",[value:"10",type:"number"])	
-	}
-	
-	if (!pauseUpdates) {
-		state.remove("batteryDate")
-		state.remove("connectionErrorCount")
-		state.lastPollTime = ""
-		
-		if (displayAllVariables) {
-			state.remove("batteryRuntime")
-			state.upsData = [:]
-		} else {
-			state.remove("upsData")
-		}
-
-		refresh()
-	}
+    log.info("NUT UPS Driver: initialize()")
+    unschedule()
+    state.telnetState = ""
+    state.upsData = [:]
+    
+    // store the key telnet connection previous input values to detect changes in updated()
+    updateDataValue("nutServerHost", nutServerHost)
+    updateDataValue("nutServerPort", nutServerPort.toString())
+    updateDataValue("upsName", upsName)
+    updateDataValue("nutServerLoginUsername", nutServerLoginUsername)
+    updateDataValue("nutServerLoginPassword", nutServerLoginPassword)
+    
+	connectToServer()
 }
 
 def refresh() {
-	if (!pauseUpdates) {
-		try {
-			telnetConnect([termChars:[10]], nutServerHost, nutServerPort.toInteger(), null, null)
-			if (state.connectionErrorCount != null) {
-				state.remove("connectionErrorCount")
-			}
-		} catch (err) {
-			if (state.connectionErrorCount == null) {
-				state.connectionErrorCount = 1	
-			} else if (state.connectionErrorCount < failedThreshold) {
-				state.connectionErrorCount += 1
-			} else if (state.connectionErrorCount >= failedThreshold) {
-				state.connectionErrorCount += 1
-				device.updateSetting("pauseUpdates",[value:"true",type:"bool"])
-				log.error "Refresh telnet connection error reached threshold of ${failedThreshold}, pausing updates: ${err}"
-				return
-			}
-			
-			log.error "Refresh telnet connection error ${state.connectionErrorCount} of ${failedThreshold}: ${err}"
-			if (state.upsName) {
-				runIn(nutPollingInterval, refresh)
-			}
-		}
-
-		if (!state.upsName) {
-			sendCommand("LIST UPS")
-			runIn(nutPollingInterval, refresh)
-		}
-		if (state.upsName) {
-			if (displayAllVariables) {
-				sendCommand("LIST VAR ${nutUpsName}")
-			} else {
-                logDebug "in refresh, stateVariables=${stateVariables}"
-				for (int i=0;i < stateVariables.size(); i++) {
-					sendCommand("GET VAR ${nutUpsName} ${stateVariables[i]}")
-				}
-			}
-			runIn(nutPollingInterval, refresh)
-		}
-		sendCommand("LOGOUT")
-	}
+    if (logEnable) log.debug "refresh() ---"
+	setState(STATE_REFRESH)
+	sendMsg("LIST VAR ${upsName}")
+	setState(STATE_WAITINGFOREVENT)
+	runIn(nutPollingInterval, refresh)
 }
 
-def beeperEnable() {
-    beeperCmd("beeper.enable")
+def telnetStatus(String status) {
+	if(logEnable) log.debug "telnetStatus: ${status}"
+	if (status == "receive error: Stream is closed" || status == "send error: Broken pipe (Write failed)") {
+        setState(STATE_NETWORKERROR, status)
+        log.error("Telnet connection dropped: ${status}...attempting reconnection in ${nutReconnectDelay} sec")
+		close()
+		runIn(nutReconnectDelay, initialize)
+    }
 }
 
-def beeperDisable() {
-    beeperCmd("beeper.disable")
-}
-
-def beeperMute() {
-    beeperCmd("beeper.mute")
-}
-
-def beeperCmd(cmd) {
-	if (!pauseUpdates) {
-		try {
-			telnetConnect([termChars:[10]], nutServerHost, nutServerPort.toInteger(), null, null)
-			if (state.connectionErrorCount != null) {
-				state.remove("connectionErrorCount")
-			}
-		} catch (err) {
-			if (state.connectionErrorCount == null) {
-				state.connectionErrorCount = 1	
-			} else if (state.connectionErrorCount < failedThreshold) {
-				state.connectionErrorCount += 1
-			} else if (state.connectionErrorCount >= failedThreshold) {
-				state.connectionErrorCount += 1
-				device.updateSetting("pauseUpdates",[value:"true",type:"bool"])
-				log.error "Refresh telnet connection error reached threshold of ${failedThreshold}, pausing updates: ${err}"
-				return
-			}
-			
-			log.error "Refresh telnet connection error ${state.connectionErrorCount} of ${failedThreshold}: ${err}"
-		}
-
-		if (state.upsName) {
-			sendCommand("USERNAME admin")
-            pauseExecution(1000)
-            sendCommand("PASSWORD tripplite")
-            pauseExecution(1000)
-            sendCommand("INSTCMD ${nutUpsName} ${cmd}")
-            pauseExecution(1000)
-		}
-		sendCommand("LOGOUT")
-	}
-}
-
-def execCommand(cmdStr) {
-	if (!pauseUpdates) {
-		try {
-			telnetConnect([termChars:[10]], nutServerHost, nutServerPort.toInteger(), null, null)
-			if (state.connectionErrorCount != null) {
-				state.remove("connectionErrorCount")
-			}
-		} catch (err) {
-			if (state.connectionErrorCount == null) {
-				state.connectionErrorCount = 1	
-			} else if (state.connectionErrorCount < failedThreshold) {
-				state.connectionErrorCount += 1
-			} else if (state.connectionErrorCount >= failedThreshold) {
-				state.connectionErrorCount += 1
-				device.updateSetting("pauseUpdates",[value:"true",type:"bool"])
-				log.error "Refresh telnet connection error reached threshold of ${failedThreshold}, pausing updates: ${err}"
-				return
-			}
-			
-			log.error "Refresh telnet connection error ${state.connectionErrorCount} of ${failedThreshold}: ${err}"
-		}
-
-		if (state.upsName) {
-			sendCommand(cmdStr)
-		}
-		sendCommand("LOGOUT")
-	}
+def close() {
+    // wipe any pending refresh and reconnect timers
+    unschedule()
+    telnetClose()
+    setState(STATE_DISCONNECTED)
 }
 
 def parse(String message) {
-	logDebug "Received: ${message}"
-	
+	if (telnetLogEnable) log.info("receiving telnet message: ${message}")
+
 	String[] msg = message.split("\"?( |\$)(?=(([^\"]*\"){2})*[^\"]*\$)\"?")
-	if (msg[0] == "UPS") {
-		state.upsName = msg[1]
-		refresh()
-	} else if (message == "BEGIN LIST VAR " + state.upsName) {
-		// Do nothing
-	} else if (msg[0] == "VAR") {
-        logDebug "In parse, msg=${msg}"
-		parseValues(msg.drop(2))
-	} else if (message == "OK Goodbye") {
-		setLastPoll()
-	} else if (message == "END LIST VAR " + state.upsName) {
-		setLastPoll()
+	
+	switch (msg[0]) {
+		case "BEGIN":
+			parseBEGIN(msg.drop(1))
+			break
+		case "END":
+			parseEND(msg.drop(1))
+            updateMessageTimestamp()
+			break
+		case "UPS":
+			parseUPS(msg.drop(1))
+			break
+		case "VAR":
+			parseVAR(msg.drop(1))
+			break
+		case "OK":
+			parseOK(msg.drop(1))
+			break
+		default:
+			log.error("Parse: Couldn't process message: \"${message}\"")
 	}
 }
 
-def setLastPoll() {
-	def nowDateTime = new java.text.SimpleDateFormat("MM/dd hh:mm a")
-	nowDateTime.setTimeZone(location.timeZone)
-	nowDateTime = nowDateTime.format(new Date()).toString()
-	state.lastPollTime = nowDateTime
+def parseBEGIN(String[] msg) {
+	switch (msg[0]) {
+		case "LIST":
+			parseBEGIN_LIST(msg.drop(1))
+			break
+		default:
+			log.error("ParseBEGIN: Couldn't process message: \"${msg}\"")
+	}
 }
 
-def parseValues(String[] msg) {
-    logDebug "In parseValues, msg=${msg}"
-	def result = []
-	def key = msg[0]
-	def value = msg.length > 1 ? msg[1] : null
-	
-	if (displayAllVariables) {
-		// If no values have changed stop parsing to minimize logging
-		if (state.upsData.containsKey(key) && state.upsData.get(key) == value) {
-			return
-		} else {
-            def from = state.upsData.get(key)
-            logDebug "In parseValues, value changed key: ${key}, from: ${from}, to: ${value}"
-			state.upsData["${key}".toString()] = value
-		}
+def parseBEGIN_LIST(String[] msg) {
+	switch (msg[0]) {
+		case "UPS":
+			setState(STATE_PROCESSINGUPSLIST)
+			break
+		case "VAR":
+			displayDebugLog "Processing of values for \"${msg[1]}\" started"
+			break
+		default:
+			log.error("ParseBEGIN_LIST: Couldn't process message: \"${msg}\"")
+	}
+}
+
+def parseEND(String[] msg) {
+	switch (msg[0]) {
+		case "LIST":
+			parseEND_LIST(msg.drop(1))
+			break
+		default:
+			log.error("ParseEND: Couldn't process message: \"${msg}\"")
+	}
+}
+
+def parseEND_LIST(String[] msg) {
+	switch (msg[0]) {
+		case "UPS":
+			refresh()
+			break
+		case "VAR":
+			displayDebugLog "Processing of values for \"${msg[1]}\" finished"
+			break
+		default:
+			log.error("ParseEND_LIST: Couldn't process message: \"${msg}\"")
+	}
+}
+
+def parseUPS(String[] msg) {
+    displayDebugLog "UPS found with ID: \"${msg[0]}\""
+    if (msg[0] != upsName) log.error "NUT UPS ID does not match entered NUT server UPS name"
+}
+
+def parseVAR(String[] msg) {
+    
+  	def result = []
+	def key = msg[1]
+	def value = msg.length > 1 ? msg[2] : null
+
+	// If no values have changed stop parsing to minimize logging
+	if (state.upsData.containsKey(key) && state.upsData.get(key) == value) {
+        displayDebugLog "In parseVAR, value key unchanged: ${key}"
+		return
+	} else {
+        def from = state.upsData.get(key)
+        displayDebugLog "In parseVAR, value changed key: ${key}, from: ${from}, to: ${value}"
+	    state.upsData["${key}".toString()] = value
 	}
 
 	switch (key) {
 		case "battery.charge":
-			result << createEvent(name: 'battery', value: value, unit: "%",	descriptionText: "Battery is at ${value}%")
+			result << createEvent(name: 'battery', value: value, unit: "%", descriptionText: "Battery is at ${value}%")
 			break;
 		case "battery.voltage":
-			result << createEvent(name: 'batteryVoltage', value: value, unit: "Volts",	descriptionText: "Battery voltage is ${value} Volts")
+			result << createEvent(name: 'batteryVoltage', value: value, unit: "Volts", descriptionText: "Battery voltage is ${value} Volts")
 			break;
 		case "battery.runtime":
-			// The runtime value changes quite frequently based on UPS load.  To minimize logging, set device attbitute to "mains" while on mains power, but reflect actual in a state variable
-            def runtime = (Integer.parseInt(value) / 60) + " minutes"
-			state.batteryRuntime = runtime
-			
-			if (device.currentValue("powerSource") == "mains" && device.currentValue("batteryRuntime") != "mains") {
-				result << createEvent(name: 'batteryRuntime', value: "mains", descriptionText: "Remaining runtime is ${runtime}")
-			} else if (device.currentValue("powerSource") != "mains") {
-				result << createEvent(name: 'batteryRuntime', value: runtime, descriptionText: "Remaining runtime is ${runtime}")
-			}
+			result << createEvent(name: 'batteryRuntime', value: value, descriptionText: "Remaining runtime is ${value} sec")
 			break;
         case "input.voltage":
 			result << createEvent(name: 'voltage', value: value, unit: "Volts",	descriptionText: "Input voltage is ${value} Volts")
@@ -294,6 +235,7 @@ def parseValues(String[] msg) {
 			result << createEvent(name: 'beeperStatus', value: value, descriptionText: "Device beeper status is ${value}")
 			break;
 		case "ups.status":
+            result << createEvent(name: 'upsStatus', value: value, descriptionText: "Device status is ${value}")
 			def statuses = value.split(" ")
 			def powerSource = "unknown"
 			if (statuses.contains('OL')) {
@@ -305,7 +247,7 @@ def parseValues(String[] msg) {
 			result << createEvent(name: 'powerSource', value: powerSource, descriptionText: "Power source is ${powerSource}")
 
 			if (!statuses.contains('ALARM') && device.currentValue("deviceAlarm") != "All Clear") {
-				logDebug "Alarm no longer detected."
+				displayDebugLog "In parseVAR: Alarm no longer detected."
 				result << createEvent(name: 'deviceAlarm', value: 'All Clear', descriptionText: "Alarm removed.")
 			}
 
@@ -328,27 +270,155 @@ def parseValues(String[] msg) {
 			]
 
 			String statusText = statuses?.collect { statusCodeMap[it] }.join(", ")
-			result << createEvent(name: 'upsStatus', value: statusText, descriptionText: "Device status is ${statusText}")
+			result << createEvent(name: 'upsStatusDescription', value: statusText, descriptionText: "Device status description is ${statusText}")
 			break;
 	}
 	
-	return result
+	return result  
 }
 
-def telnetStatus(String status) {
-	// Exlude "Stream is closed" messages since logout causes this message
-	if (status != "receive error: Stream is closed") {
-		log.error("telnetStatus: ${status}")
+def parseOK(String[] msg) {
+
+    switch(state.telnetState) {
+		case STATE_AUTH_PHASE1:
+		    nutAuthPhase2()
+		    break
+	    case STATE_AUTH_PHASE2:
+		    nutListUPS()
+		    break
+        case STATE_SENDINGCMD:
+            break
+	    default:
+		    log.error("ParseOK: Couldn't process message: ${msg}")
+    }
+}
+
+def updateMessageTimestamp(){
+    displayDebugLog "updateMessageTimestamp()"
+    def ts = new Date()
+    def ts_str = ts.format("yyyy-MM-dd HH:mm:ss")  //2020-09-25 18:00:00
+    createEvent(name: 'lastUpdated', value: ts_str, descriptionText: "Last message received from NUT server timestamp")
+}
+
+def connectToServer() {
+  
+		try {
+            
+            if (telnetLogEnable) log.info("connectToServer: Opening telnet connection, host ${nutServerHost}, port ${nutServerPort}")
+		    setState(STATE_CONNECTING)
+            telnetConnect([termChars:[10]], nutServerHost, nutServerPort.toInteger(), null, null)
+            pauseExecution(1000)
+            setState(STATE_CONNECTED)
+		    sendEvent(name: 'networkStatus', value: "online", descriptionText: "Device network connection status is online")
+            if (telnetLogEnable) log.info("connectToServer: telnet connection established to host ${nutServerHost}, port ${nutServerPort}")
+        
+		    if (isAuthRequired()) {
+			    nutAuthPhase1()
+		    }
+		    else {
+			    nutListUPS()
+		    }
+            
+	    } catch(Exception ex) {
+            
+            setState(STATE_NETWORKERROR)
+            log.error("connectToServer: telnetConnect error: ${ex}")
+		    sendEvent(name: 'networkStatus', value: "offline", descriptionText: "Device network connection status is offline")
+            
+	    }
+}
+
+def isAuthRequired() {
+	if (nutServerLoginUsername != null && nutServerLoginPassword != null) {
+		return true
+	} else {
+		if (nutServerLoginUsername != null || nutServerLoginPassword != null) {
+			log.warn "To authenticate to NUT server, both username AND password must be given. Defaulting to unathenticated session"
+		}
+		return false
 	}
 }
 
-def sendCommand(cmd) {
-	logDebug "sendCommand - Sending ${cmd}"
-	return sendHubCommand(new hubitat.device.HubAction("${cmd}", hubitat.device.Protocol.TELNET))
+def nutAuthPhase1() {
+	setState(STATE_AUTH_PHASE1)
+    pauseExecution(25)
+	sendMsg("USERNAME ${nutServerLoginUsername}")
 }
 
-private logDebug(msg) {
-	if (isDebugEnabled) {
-		log.debug "$msg"
-	}
+def nutAuthPhase2() {
+	setState(STATE_AUTH_PHASE2)
+    pauseExecution(25)
+	sendMsg("PASSWORD ${nutServerLoginPassword}")
 }
+
+def nutListUPS() {
+	setState(STATE_GETTINGUPSLIST)
+    pauseExecution(25)
+	sendMsg("LIST UPS")
+}
+
+def sendMsg(String msg) {
+	if (telnetLogEnable) log.info("sending telnet message: ${msg}")
+	def hubCmd = sendHubCommand(new hubitat.device.HubAction("${msg}", hubitat.device.Protocol.TELNET))
+    //pauseExecution(50)
+    return hubCmd
+}
+
+def beeperEnable() {
+    setState(STATE_SENDINGCMD)
+    pauseExecution(25)
+    sendMsg("INSTCMD ${upsName} beeper.enable")
+}
+
+def beeperDisable() {
+    setState(STATE_SENDINGCMD)
+    pauseExecution(25)
+    sendMsg("INSTCMD ${upsName} beeper.disable")
+}
+
+def beeperMute() {
+    setState(STATE_SENDINGCMD)
+    pauseExecution(25)
+    sendMsg("INSTCMD ${upsName} beeper.mute")
+}
+
+def execCommand(cmdStr) {
+    setState(STATE_SENDINGCMD)
+    pauseExecution(25)
+	sendMsg(cmdStr)
+}
+
+def setState(String newState) {
+    state.telnetState = newState
+    if (stateLogEnable) {
+        log.info "setState: ${state.telnetState}"
+        def descriptionState = "Device telnet session state is ${state.telnetState}"
+//        sendEvent(name: 'telnetSessionState', value: state.telnetState, descriptionText: descriptionText)
+    }
+}
+
+def setState(String newState, String additionalInfo) {
+    state.telnetState = newState + " (${additionalInfo})"
+    if (stateLogEnable) {
+        log.info "setState: ${state.telnetState}"
+        def descriptionState = "Device telnet session state is ${state.telnetState}"
+//        sendEvent(name: 'telnetSessionState', value: state.telnetState, descriptionText: descriptionText)        
+    }
+
+}
+
+private def displayDebugLog(message) {
+	if (logEnable) log.debug "${device.displayName}: ${message}"
+}
+
+@Field static final String STATE_DISCONNECTED = "Disconnected"
+@Field static final String STATE_CONNECTING = "Connecting"
+@Field static final String STATE_CONNECTED = "Connected"
+@Field static final String STATE_GETTINGUPSLIST = "Getting list of UPSes"
+@Field static final String STATE_PROCESSINGUPSLIST = "Processing list of UPSes"
+@Field static final String STATE_REFRESH = "Refreshing values"
+@Field static final String STATE_SENDINGCMD = "Sending command"
+@Field static final String STATE_WAITINGFOREVENT = "Waiting for events to occur"
+@Field static final String STATE_NETWORKERROR = "Network Error"
+@Field static final String STATE_AUTH_PHASE1 = "Authentication - Phase 1"
+@Field static final String STATE_AUTH_PHASE2 = "Authentication - Phase 2"
