@@ -22,9 +22,9 @@
  *
  *    Date          By         Description
  *    ----------    -------    -----------
- *    04/14/2023    Guffman    Modified for only local communication and for Tuya Air Conditioner protocol.
- *			       Hacked J. Bradshaw's Tuya RGBW device code and his Tuya protocol library code 
- *			       to enable network control of a Friedrich Window A/C.
+ *    06/28/2023    Guffman    Modified for only local communication and for Tuya Air Conditioner protocol.
+ *			                   Hacked J. Bradshaw's Tuya RGBW device code and his Tuya protocol library code 
+ *			                   to enable network control of a Friedrich Window A/C.
 */
 import com.hubitat.app.DeviceWrapper
 import hubitat.helper.HexUtils
@@ -44,6 +44,7 @@ metadata {
         capability 'Actuator'
         capability 'Sensor'
         capability 'Thermostat'
+        capability 'Refresh'
 
         attribute "supportedThermostatFanModes", "JSON_OBJECT"
 		attribute "supportedThermostatModes", "JSON_OBJECT"
@@ -61,7 +62,6 @@ metadata {
         command "fanLow"
         command "fanMedium"
         command "fanHigh"
-        command 'refresh'
         
         command 'sendCustomDps', [[name: 'Dps', type: 'NUMBER'], [name: 'Value', type: 'STRING']]
     }
@@ -72,7 +72,8 @@ preferences {
         input name: 'ipAddress',
               type: 'text',
               title: 'Device IP',
-              required: true
+              required: true,
+              defaultValue: '192.168.40.40'
 
         input name: 'repeat',
               title: 'Command Retries',
@@ -95,15 +96,30 @@ preferences {
               range: '0..60',
               defaultValue: '20'
         
+        input name: 'refreshEnable',
+              type: 'bool',
+              title: 'Refresh after Heartbeat',
+              required: false,
+              defaultValue: false
+
         input name: 'id',
               title: 'Device ID:',
               type: 'text',
-              required: true
+              required: true,
+              defaultValue: '6053105810521c05cbe7'
 
         input name: 'localKey',
               title: 'Device Local Key:',
               type: 'text',
-              required: true
+              required: true,
+              defaultValue: '96a0f792ef5adef5'
+
+        input name: 'powerOnSetpt',
+              title: 'Setpoint to issue when transitioning from Off to Cool',
+              type: 'number',
+              required: true,
+              range: '66..82',
+              defaultValue: '75'
 
         input name: 'logEnable',
               type: 'bool',
@@ -126,6 +142,9 @@ preferences {
 @Field static final Integer modeDps  = 4
 @Field static final Integer fanDps   = 5
 @Field static final Integer ecoDps   = 8
+@Field static final Integer unkDps1   = 20
+@Field static final Integer unkDps2   = 101
+@Field static final Integer unkDps3   = 102
 
 // Queue used for ACK tracking
 @Field static queues = new ConcurrentHashMap<String, SynchronousQueue>()
@@ -143,6 +162,11 @@ void heartbeat() {
             LOG.debug "received heartbeat"
         } else {
             LOG.warn "no response to heartbeat"
+        }
+        
+        if (refreshEnable) {
+            LOG.debug "sending refresh"
+            tuyaSendCommand(id, ipAddress, localKey, null, 'DP_QUERY')
         }
     }
 
@@ -195,14 +219,21 @@ void refresh() {
 }
 
 // Air Conditioner Modes
-void setSupportedThermostatFanModes(fanModes) {
-    descriptionText = "${device.displayName} ${name} supportedThermostatFanModes set to ${fanModes}"
-	sendEvent(name: "supportedThermostatFanModes", value: fanModes, descriptionText: descriptionText)
-}
-
 void setSupportedThermostatModes(modes) {
     descriptionText = "${device.displayName} ${name} supportedThermostatModes set to ${modes}"
 	sendEvent(name: "supportedThermostatModes", value: modes, descriptionText: descriptionText)
+}
+
+def setThermostatMode(mode) {
+    switch (mode) {
+        case "auto" : auto() ; break
+        case "off" : off() ; break
+        case "cool" : cool() ; break
+        case "fan only" : fan_only() ; break
+        case "dry" : dry() ; break
+        case "economy" : ecoMode('On') ; break
+        default : LOG.error "Undefined thermostatMode"
+    }
 }
 
 void auto() {
@@ -211,7 +242,8 @@ void auto() {
 }    
     
 void cool() {
-    LOG.info "sending command: cool"
+    def setpt = device.currentValue("coolingSetpoint").toInteger()
+    LOG.info "sending command: cool, setpt=${powerOnSetpt}; current coolingSetpoint=${setpt}"
     if (!repeatCommand([ (powerDps as String): true, (modeDps as String): 'cold', (setptDps as String): 76 ])) LOG.error "Cool command failed"
 }    
 
@@ -252,6 +284,23 @@ def setHeatingSetpoint(spt) {
 }
 
 // Air Conditioner Fan Modes
+void setSupportedThermostatFanModes(fanModes) {
+    descriptionText = "${device.displayName} ${name} supportedThermostatFanModes set to ${fanModes}"
+	sendEvent(name: "supportedThermostatFanModes", value: fanModes, descriptionText: descriptionText)
+}
+
+def setThermostatFanMode(fanMode) {
+switch (fanMode) {
+        case "auto" : fanAuto() ; break
+        case "on"   : fanLow() ; break
+        case "low"  : fanLow() ; break
+        case "med"  : fanMedium() ; break
+        case "high" : fanHigh() ; break
+        case "circulate" : fanCirculate() ; break
+        default : LOG.error "Undefined fanMode"
+    }
+}
+
 def fanAuto() {
     LOG.info "sending command: Fan Auto requested"
     if (!repeatCommand([ (fanDps as String): '4' ])) LOG.error "fanAuto command failed"    
@@ -352,7 +401,7 @@ private void parseDeviceState(Map dps) {
 //    Map functions = getFunctions(device)
 //    def func = device.getDataValue('functions')
 //    Map functions = new JsonSlurper().parseText(device.getDataValue('functions'))
-    LOG.debug "parseDeviceState: dps ${dps}, device=${device}"    
+    LOG.debug "parseDeviceState: dps ${dps}"    
     List<Map> events = []
     def unit = "°${location.temperatureScale}"
     
@@ -391,6 +440,7 @@ private void parseDeviceState(Map dps) {
     // Device on/off state
     if (dps.containsKey(powerDps as String)) {
         String tuya_power = dps[powerDps as String] ? 'on' : 'off'
+        LOG.debug "parseDeviceState: power is ${tuya_power}, device=${device}"
         
         if (tuya_power == 'off') {
             mode = "off"
@@ -468,7 +518,7 @@ private void parseDeviceState(Map dps) {
     
     events.each { e ->
         if (device.currentValue(e.name) != e.value) {
-            if (e.descriptionText && txtEnable) { LOG.info "${e.descriptionText}" }
+            //if (e.descriptionText && txtEnable) { LOG.info "${e.descriptionText}" }
             sendEvent(e)
         }
     }
@@ -508,7 +558,7 @@ private Map repeatCommand(Map dps) {
 
             result = queue.poll(timeoutSecs, TimeUnit.SECONDS)
             if (result) {
-                LOG.info "received device ack"
+                LOG.debug "received device ack"
                 break
             } else {
                 LOG.warn "command timeout (${i} of ${repeat})"
@@ -522,7 +572,7 @@ private Map repeatCommand(Map dps) {
 
 @Field private final Map LOG = [
     debug: { s -> if (settings.logEnable == true) { log.debug(s) } },
-    info: { s -> log.info(s) },
+    info: { s -> if (settings.txtEnable == true) { log.info(s) } },
     warn: { s -> log.warn(s) },
     error: { s -> log.error(s) },
     exception: { message, exception ->
