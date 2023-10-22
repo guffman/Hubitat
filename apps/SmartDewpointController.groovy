@@ -3,6 +3,7 @@
 *
 *  Adjusts a switch/outlet based on a target high / low dewpoint 
 *    -Use a standard differential gap algorithm for the control algorithm
+*    -Provide for dewpoint control override based on high humidity
 *
 *  Copyright 2019 Guffman Ventures LLC
 *  GNU General Public License v2 (https://www.gnu.org/licenses/gpl-2.0.txt)
@@ -20,7 +21,11 @@
 *    2021-06-05  Marc Chevis    Cleaned up some logging inconsistencies, added elapsed time-in-state calcs for thermostat
 *    2021-07-04  Marc Chevis    Removed thermostat fan control modes. Logic (if needed) better implemented outside of the app.
 *    2021-07-07  Marc Chevis    Added high humidity override feature.
-*
+*    2021-10-12  Marc Chevis    Added additional info log messages.
+*    2021-10-27  Marc Chevis    Added logic to reduce short run times of the dehumidifer (needs to be running for ~10 mins to dehumidify efficiently).
+*    2022-05-05  Marc Chevis    Revised high humidity override logic, inhibit after cooling cycle changed to allow dehumidifer to continue running if in on state.
+*    2022-05-27  Marc Chevis    Added event handler for high humidity override setpoint change.
+*    2023-10-22  Marc Chevis    Fixed inhibit logic - thermostat start cooling was not inhibiting the dehumidifer control output.
 *
 */
 
@@ -60,26 +65,26 @@ def pageConfig() {
             }
             input "humOverride", "bool", title: "Override Dewpoint Control on High Humidity?", required: false, defaultValue: false, submitOnChange: true
             if (humOverride) {
-                input "humSpt", "number", title: "Humidity Override Setpoint (%RH):", required: true, range: "50..65", defaultValue: 60
+                input "humSpt", "capability.relativeHumidityMeasurement", title: "Humidity Override Setpoint:", required: true, multiple: false
 			    input "humSensor", "capability.relativeHumidityMeasurement", title: "Humidity Sensor:", required: true, multiple: false
             }
 		}
 		section("<b>Gap Controller Settings</b>")
 		{
             input "loopDband", "decimal", title: "Deadband (°F)", required: true, range: "0.5..3.0", defaultValue: 1.0
-            input "minOnTime", "number", title: "Dehumidify Control Output Minimum On Time (mins)", required: true, range: "5..30", defaultValue: 5
+            input "minOnTime", "number", title: "Dehumidify Control Output Minimum On Time (mins)", required: true, range: "5..30", defaultValue: 10
         }
         section("<b>Gap Controller Override Settings</b>")
         {
-            input "inhibitDuringCooling", "bool", title: "Inhibit Dehumidify Control during a Thermostat Cooling Cycle?", required: false, defaultValue: false
+            input "inhibitDuringCooling", "bool", title: "Inhibit Dehumidify Control Output during a Thermostat Cooling Cycle?", required: false, defaultValue: false, submitOnChange: true
             if (inhibitDuringCooling) {
-                input "inhibitDuringCoolingDelay", "number", title: "When Cooling Cycle starts, delay inhibit for (mins):", required: false, range: "0..30", defaultValue: 5
+                input "inhibitDuringCoolingDelay", "number", title: "When Cooling Cycle starts, if Dehumidifier running, delay inhibit for (mins):", required: true, range: "0..30", defaultValue: 5
             } else {
                 inhibitDuringCoolingDelay = 0
             }
-            input "inhibitAfterCooling", "bool", title: "Inhibit Dehumidification after a Thermostat Cooling Cycle?", required: false, defaultValue: true, submitOnChange: true
+            input "inhibitAfterCooling", "bool", title: "Inhibit Dehumidify Control Output after a Thermostat Cooling Cycle?", required: false, defaultValue: true, submitOnChange: true
             if (inhibitAfterCooling) {
-                input "inhibitAfterCoolingDelay", "number", title: "When Cooling Cycle ends, inhibit Dehumidification for (mins):", required: false, range: "0..30", defaultValue: 10
+                input "inhibitAfterCoolingDelay", "number", title: "When Cooling Cycle ends, if Dehumidifer idle, inhibit running for (mins):", required: true, range: "0..30", defaultValue: 10
             } else {
                 inhibitAfterCoolingDelay = 0
             }
@@ -92,6 +97,7 @@ def pageConfig() {
             input "fanFeedbackPwrLimit", "number", title: "Fan Control Feedback Power Threshold (W)", required: false, range: "0..150", defaultValue: 50
             input "fanFeedbackSwitch", "capability.switch", title: "Fan Control Feedback Indicator - Switch:", required: false, multiple: false
             input "tstat", "capability.thermostat", title: "Associated Thermostat:", required: true, multiple: false
+            input "inhibitFeedbackSwitch", "capability.switch", title: "Controller Inhibited Feedback Indicator - Switch:", required: false, multiple: false
 		}
 		section("<b>Logging</b>")
 		{                       
@@ -122,6 +128,9 @@ def initialize()
     // Initialize the controller un-inhibited; later logic will determine inhibited state based on thermostat operating state 
     state.inhibited = false
     
+    // Initialize the controller override disabled; later logic will determine override state based on high humidity
+    state.override = false
+    
     // minOnTimePassed is used to prevent the controller transitioning to off prior to minOnTime. Prevents short-cycling of the dehumidifier.
     // While minOnTimePassed is true, the controller is permitted to turn off.
     state.minOnTimePassed = true
@@ -131,18 +140,19 @@ def initialize()
     state.starting = false
     state.stopping = false
     
-    // Need to initialize the controller state - use the humidControlSwitch state
+    // Need to initialize the controller state - use the humControlSwitch state
     state.co = (humControlSwitch.currentValue("switch") == "on") ? true : false
 
     subscribe(humControlSwitch, "switch", humSwitchHandler)   
+    subscribe(humFeedbackSwitch, "switch", humFeedbackSwitchHandler)
     
     if (fanControlSwitch != null) {
         subscribe(fanControlSwitch, "switch", fanSwitchHandler)
     }
     
-    if (humOverride) {
+    if (humOverride) { 
         subscribe(humSensor, "humidity", humHandler)
-        state.override = (humSpt - humSensor.currentValue("humidity") > 0) ? false : true
+        subscribe(humSpt, "humidity", humSptHandler)
     }
     
     state.pv  = tempSensor.currentValue("temperature").toFloat()
@@ -172,14 +182,14 @@ def initialize()
         state.secondsInCooling = 0
         state.secondsInIdle = 0
     } else {
-        debuglog "initialize: thermostat state timestamps already exist - time-in-state variables unchanged"
+        debuglog "+++ initialize: thermostat state timestamps already exist - time-in-state variables unchanged"
     }
     calcTstatStateTimers()
-    schedule("0 */1 * ? * *", 'calcTstatStateTimers')
+    //schedule("0 */1 * ? * *", 'calcTstatStateTimers')
     
     state.power = powerMeter.currentValue("power")    
     subscribe(powerMeter, "power", powerMeterHandler)
-    calcEquipmentStates(state.power)
+    calcEquipmentStates()
     
     calcSetpoints()
     execControlLoop()
@@ -189,12 +199,13 @@ def initialize()
 
 def dewpointHandler(evt)
 {
-    infolog "+++ dewpointHandler: value changed: ${evt.value}"
+    infolog "+++ dewpointHandler: value changed: ${evt.value}, sp high = ${state.loopSptHigh}, sp low = ${state.loopSptLow}, override = ${state.override}"
 
     state.pv = tempSensor.currentValue("temperature").toFloat()
     state.pvStr = String.format("%.1f", state.pv) + "°F"
     
     calcTstatStateTimers()
+    calcEquipmentStates()
     execControlLoop()
 }
 
@@ -204,43 +215,57 @@ def sptHandler(evt)
 
     calcSetpoints()
     calcTstatStateTimers()
+    calcEquipmentStates()
+    execControlLoop()
+}
+
+def humSptHandler(evt)
+{
+    infolog "+++ humSptHandler: setpoint changed: ${evt.value}"
+    
+    calcSetpoints()
+    calcTstatStateTimers()
+    calcEquipmentStates()
     execControlLoop()
 }
 
 def powerMeterHandler(evt)
 {
-    infolog "+++ powerMeterHandler: Power changed: ${evt.value}"
+    debuglog "+++ powerMeterHandler: Power changed: ${evt.value}"
     
     state.power = evt.value
-    calcEquipmentStates(evt.value)
+    calcEquipmentStates()
 }
 
 def humHandler(evt)
 {    
-    // Test for override condition, apply 2% hysteresis to prevent flapping only following override state transition
     humPv = evt.value.toDouble()
+    
+    // Test for override condition
     if (state.override) {
-        ovr = (humSpt - humPv < 2.0) ? true : false
+        ovr = (humPv < state.humSptLow)  ? false : true
     } else {
-        ovr = (humSpt - humPv >= 0) ? false : true
+        ovr = (humPv > state.humSptHigh) ? true : false
     }
     
-    infolog "+++ humHandler: value changed: ${evt.value}, high humidity override = ${ovr}"
+    infolog "+++ humHandler: value changed: ${evt.value}, spt high = ${state.humSptHigh}, spt low = ${state.humSptLow}, state.override = ${state.override}, ovr = ${ovr}"
     
-    // Only execute the loop if in override state or if just made a transition to the override state
+    // Only execute the loop if in override state or if just made a transition
     if (state.override && ovr) {    
         calcTstatStateTimers()
         execControlLoop()
     } else if (state.override != ovr) {
         state.override = ovr
+        infolog "+++ humHandler: override transition, state.override= ${state.override}"
         calcTstatStateTimers()
         execControlLoop()
+        
     }
 }
 
 def fanSwitchHandler(evt) 
 {
-    infolog "+++ fanSwitchHandler: Switch changed: ${evt.value}"
+    debuglog "+++ fanSwitchHandler: Switch changed: ${evt.value}"
     
 	switch(evt.value)
 	{
@@ -255,7 +280,7 @@ def fanSwitchHandler(evt)
 
 def humSwitchHandler(evt) 
 {
-    infolog "+++ humSwitchHandler: Switch changed: ${evt.value}"
+    debuglog "+++ humSwitchHandler: Switch changed: ${evt.value}"
     
 	switch(evt.value)
 	{
@@ -268,6 +293,24 @@ def humSwitchHandler(evt)
     }
 }
 
+def humFeedbackSwitchHandler(evt) 
+{
+    def infostr = "+++ humFeedbackSwitchHandler: Switch changed: ${evt.value}"
+    
+	switch(evt.value)
+	{
+		case "on":
+            state.starting = false
+            infostr += ", state.starting=false"
+			break
+        case "off":
+            state.stopping = false
+            infostr += ", state.stopping=false"
+			break
+    }
+    infolog infostr
+}
+
 def tstatModeHandler(evt)   
 {
     infolog "+++ tstatModeHandler: Thermostat mode changed: ${evt.value}"
@@ -275,29 +318,34 @@ def tstatModeHandler(evt)
 }
 
 def tstatStateHandler(evt) {   
-    infolog "+++ tstatStateHandler: Thermostat operating state changed: ${evt.value}"
+    infolog "+++ tstatStateHandler: Thermostat state changed: ${evt.value}, state.prevTstatState: ${state.prevTstatState}"
     
     state.tstatState = evt.value
-        
-    if ((state.tstatState == "cooling") && (state.prevTstatState == "idle")) {
-        // Idle->Cooling transition, capture the start time, schedule the inhibited flag set
+
+    if ((state.tstatState == "cooling") && (state.prevTstatState != "cooling")) {
+        // Idle->Cooling transition, capture the start time, schedule the inhibited flag set, only if dehumidifier running. Inhibit if dehumidifier not running.
         state.coolingStartTime = now()
         state.secondsInCooling = 0
-        state.prevTstatState = state.tstatState
-        if (inhibitDuringCooling) {
-            state.inhibited = false
-            runIn(inhibitDuringCoolingDelay * 60, 'setInhibit')
+        state.prevTstatState = "cooling"
+        if (inhibitDuringCooling && !state.co) {
+            infolog "+++ tstatStateHandler: Inhibit during cooling, state.co: ${state.co}, calling setInhibit"
+            setInhibit()
+        } else if (inhibitDuringCooling && state.co) {
+            infolog "+++ tstatStateHandler: Inhibit during cooling, state.co: ${state.co}, calling clearInhibit, will setInhibit after ${inhibitDuringCoolingDelay} min"
+            clearInhibit()
+            inhibitDuringCoolingDelay ? runIn(inhibitDuringCoolingDelay * 60, 'setInhibit') : setInhibit()
         }
     }
     
-    if ((state.tstatState == "idle") && (state.prevTstatState == "cooling")) {
-        // Cooling->Idle transition, capture the end time, schedule the inhibited flag clear
+    if ((state.tstatState != "cooling") && (state.prevTstatState == "cooling")) {
+        // Cooling->Idle transition, capture the end time, schedule the inhibited flag clear, only if dehumidifer not running
         state.coolingStopTime = now()
         state.secondsInIdle = 0
         state.prevTstatState = state.tstatState
-        if (inhibitAfterCooling) {
-            state.inhibited = true
-            runIn(inhibitAfterCoolingDelay * 60, 'clearInhibit')
+        if (inhibitAfterCooling && !state.co) {
+            infolog "+++ tstatStateHandler: Inhibit after cooling, state.co: ${state.co}, calling setInhibit, will clearInhibit after ${inhibitAfterCoolingDelay} min"
+            setInhibit()
+            inhibitAfterCoolingDelay ? runIn(inhibitAfterCoolingDelay * 60, 'clearInhibit') : clearInhibit()
         }
     }
     
@@ -305,9 +353,23 @@ def tstatStateHandler(evt) {
     execControlLoop()
 }
 
+def setInhibit() {
+    state.inhibited = true
+    infolog "+++ setInhibit: state.inhibited=true"
+    if (inhibitFeedbackSwitch != null) inhibitFeedbackSwitch.on()
+    execControlLoop()
+}  
+    
+def clearInhibit() {
+    state.inhibited = false
+    infolog "+++ clearInhibit: state.inhibited=false"
+    if (inhibitFeedbackSwitch != null) inhibitFeedbackSwitch.off()
+    execControlLoop()
+}    
+
 def tstatFanModeHandler(evt)
 {
-    infolog "+++ tstatFanModeHandler: Thermostat fan mode changed: new mode ${evt.value}, previous mode ${state.prevTstatFanMode}"
+    debuglog "+++ tstatFanModeHandler: Thermostat fan mode changed: new mode ${evt.value}, previous mode ${state.prevTstatFanMode}"
     state.prevTstatFanMode = state.tstatFanMode
     state.tstatFanMode = evt.value
 }
@@ -315,17 +377,22 @@ def tstatFanModeHandler(evt)
 def calcSetpoints() 
 {    
     spt = loopSpt.currentValue("temperature").toFloat()
-    state.loopSptLow = (spt - (loopDband / 2.0))
-    state.loopSptHigh = (spt + (loopDband / 2.0))
-    infolog "+++ calcSetpoints: setpoint = ${spt}, loopDband = ${loopDband}, loopSptLow = ${state.loopSptLow}, loopSptHigh = ${state.loopSptHigh}"
+    state.loopSptHigh = spt
+    state.loopSptLow = spt - loopDband
+    debuglog "+++ calcSetpoints: dewpoint setpoint = ${spt}, loopDband = ${loopDband}, loopSptLow = ${state.loopSptLow}, loopSptHigh = ${state.loopSptHigh}"
+    
+    hspt = humSpt.currentValue("humidity").toFloat()
+    state.humSptHigh = hspt
+    state.humSptLow = hspt - 1.0
+    debuglog "+++ calcSetpoints: humidity override setpoint = ${hspt}, loopDband = 1.0, humSptLow = ${state.humSptLow}, humSptHigh = ${state.humSptHigh}"
 }
 
-def calcEquipmentStates(power) 
+def calcEquipmentStates() 
 {
-    debuglog "calcEquipmentStates: controller output = ${state.co}"
+    debuglog "+++ calcEquipmentStates: state.co = ${state.co}"
     
-    pwr = power.toDouble()
-    infostr = "+++ calcEquipmentStates: pwr = ${pwr}"
+    pwr = powerMeter.currentValue("power").toDouble()  
+    def infostr = "+++ calcEquipmentStates: pwr = ${pwr}"
     
     state.humFeedback = (pwr > humFeedbackPwrLimit) ? "on" : "off"
     humFeedbackNow = humFeedbackSwitch.currentValue("switch")
@@ -347,21 +414,13 @@ def calcEquipmentStates(power)
             infostr += ", sending ${state.fanFeedback} command"
         }
     }
-    infolog infostr
+    debuglog infostr
 }
-
-def setInhibit() {
-    state.inhibited = true
-}  
-    
-def clearInhibit() {
-    state.inhibited = false
-}    
 
 def calcTstatStateTimers()
 {
-    debuglog "calcTstatStateTimers: controller output = ${state.co}"
-    infostr = "+++ calcTstatStateTimers: "
+    debuglog "+++ calcTstatStateTimers: state.co = ${state.co}"
+    def infostr = "+++ calcTstatStateTimers: "
     
     currentTime = now()
     if (state.tstatState == "cooling") {
@@ -370,61 +429,65 @@ def calcTstatStateTimers()
         infostr += "tstatState = cooling for ${minsCooling} min"
     }
     
-    if (state.tstatState == "idle") {
+    if ((state.tstatState == "idle") || (state.tstatState == "pending cool")) {
         state.secondsInIdle = (int) ((currentTime - state.coolingStopTime) / 1000)
         minsIdle = (state.secondsInIdle / 60).toDouble().round(1)
         infostr += "tstatState = idle for ${minsIdle} min"
     }
-    infolog infostr
+    debuglog infostr
 }
 
 def execControlLoop()
 {     
-    infostr = "+++ execControlLoop: "
-    debuglog "execControlLoop: pv = ${state.pv}"
+    def infostr = "+++ execControlLoop:"
 
     // Compute excursion states
         
-    state.excursionLow = (state.pv < state.loopSptLow)
+    state.excursionLow = (state.pv <= state.loopSptLow)
     state.excursionHigh = (state.pv > state.loopSptHigh)
             
-    // Compute new controller state. Check the inhibit flags. If high humidity override condition, turn on output, or prevent off if already on.
-    if (state.inhibited && state.minOnTimePassed) {
+    // Compute new controller state. Check the inhibit flag 1st since it takes precedence over all other states.
+    // If high humidity override condition, turn on output, or prevent off if already on.
+    // If necessary, force controller output on until minOnTimePassed timer expires.
+
+    if (state.inhibited) {
         state.co = false
-        debuglog "execControlLoop: pv = ${state.pv}, inhibited = ${state.inhibited}, state.co = ${state.co}, turnOffOutput"
-        infostr += "turnOffOutput"
-        updateAppLabel("Inhibited - Output Off", "orange")
-        turnOffOutput()
-    } else if (state.excursionLow && state.minOnTimePassed && !state.override) {
-        debuglog "execControlLoop: pv ${state.pv} < loSpt ${state.loopSptLow} -> excursionLow, minOnTimePassed = ${state.minOnTimePassed}, turnOffOutput"
-        infostr += "turnOffOutput"
-        state.co = false
-        updateAppLabel("Below Low Limit - Output Off", "red", state.pvStr)
+        debuglog "${infostr} pv = ${state.pv}, inhibited = ${state.inhibited}, state.co = ${state.co}, turnOffOutput"
+        infolog "${infostr} inhibited, turnOffOutput"
+        updateAppLabel("Inhibited - Output Off", "red")
         turnOffOutput()
     } else if (state.override) {
-        debuglog "execControlLoop: high humidity override - turnOnOutput"
-        infostr += "turnOnOutput"
         state.co = true
+        debuglog "${infostr} pv = ${state.pv}, state.override = ${state.override}, state.co = ${state.co}, turnOnOutput"
+        infolog "${infostr} high humidity override, turnOnOutput"
         updateAppLabel("High Humidity Override - Output On", "orange")
         turnOnOutput()
+    } else if (state.excursionLow && state.co && !state.minOnTimePassed) {
+        debuglog "${infostr} pv ${state.pv} < loSpt ${state.loopSptLow} -> excursionLow, minOnTimePassed = ${state.minOnTimePassed}, controller output unchanged (${state.co})"
+        infolog "${infostr} excursionLow, minOnTimePassed = false, no output change"
+        updateAppLabel("Minimum On Timer Active - Output On", "green", state.pvStr)
+    } else if (state.excursionLow && state.minOnTimePassed) {
+        state.co = false
+        debuglog "${infostr} pv ${state.pv} < loSpt ${state.loopSptLow} -> excursionLow, minOnTimePassed = ${state.minOnTimePassed}, turnOffOutput"
+        infolog "${infostr} excursionLow, minOnTimePassed = true, turnOffOutput"
+        updateAppLabel("Below Low Limit - Output Off", "red", state.pvStr)
+        turnOffOutput()
     } else if (state.excursionHigh) {
-        debuglog "execControlLoop: pv ${state.pv} > hiSpt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
-        infostr += "turnOnOutput"
         state.co = true
+        debuglog "${infostr} pv ${state.pv} > hiSpt ${state.loopSptHigh} -> excursionHigh, turnOnOutput"
+        infolog "${infostr} excursionHigh, turnOnOutput"
         updateAppLabel("Above High Limit - Output On", "green", state.pvStr)
         turnOnOutput()
     } else {
-        debuglog "execControlLoop: loSpt ${state.loopSptLow} < pv ${state.pv} <  hiSpt ${state.loopSptHigh} -> within limits, controller output unchanged (${state.co})"
-        infostr += "no output change"
+        debuglog "${infostr} loSpt ${state.loopSptLow} < pv ${state.pv} <  hiSpt ${state.loopSptHigh} -> within limits, controller output unchanged (${state.co})"
+        infolog "${infostr} within limits, no output change"
         state.co ? updateAppLabel("Within Limits - Output On", "green", state.pvStr) : updateAppLabel("Within Limits - Output Off", "red", state.pvStr)
     }
-    infolog infostr
 }
 
 def turnOnOutput()
 {
-    infostr = "controller output = ${state.co}"
-    infolog "+++ turnOnOutput: ${infostr}"
+    def infostr = "+++ turnOnOutput: state.co = ${state.co}"
     
     //
     // Turn on sequence:
@@ -436,20 +499,22 @@ def turnOnOutput()
     //
 
     if ((state.humFeedback == "off") && !state.starting) {
-        debuglog "turnOnOutput: humFeedback = ${state.humFeedback}, state.starting = true, on sequence started"
+        debuglog "+++ turnOnOutput: humFeedback = ${state.humFeedback}, state.starting = true, on sequence started"
         
-        // Set the state.starting flag; we will reset this after confirmation of the dehumidifying on command
+        // Set the state.starting flag; we will reset this after confirmation of the dehumidifying on command via the feedback switch event
         state.starting = true
         
         if (fanControlSwitch != null) {
-            debuglog "turnOnOutput: onDelay = ${onDelay}, fanControlSwitch = ${fanControlSwitch}, minOnTime = ${minOnTime}"
+            debuglog "+++ turnOnOutput: onDelay = ${onDelay}, fanControlSwitch = ${fanControlSwitch}, minOnTime = ${minOnTime}"
             fanSwitchOn()
+            infostr += ", turning on fanControlSwitch, then humControlSwitch after ${onDelay} sec"
             (onDelay > 0) ? runIn(onDelay, 'humSwitchOn') : humSwitchOn()
         } else {    
             humSwitchOn()
+            infostr += ", turning on humControlSwitch"
         }
         if (minOnTime > 0) {
-            debuglog "turnOnOutput: minOnTimePassed set to false, will toggle in ${minOnTime} min"
+            debuglog "+++ turnOnOutput: minOnTimePassed set to false, will toggle in ${minOnTime} min"
             state.minOnTimePassed = false
             runIn(60 * minOnTime, 'setMinOnTimePassed')
         } else {
@@ -457,17 +522,20 @@ def turnOnOutput()
         }
     } else {
         if (state.starting) {
-            debuglog "turnOnOutput: humFeedback = ${state.humFeedback}, state.starting=true"
+            debuglog "+++ turnOnOutput: humFeedback = ${state.humFeedback}, state.starting=true"
+            infostr += ", waiting for humFeedback"
         } else {
-            debuglog "turnOnOutput: humFeedback = ${state.humFeedback}, output already on"
+            debuglog "+++ turnOnOutput: humFeedback = ${state.humFeedback}, output already on"
+            infostr += ", output already on, humFeedback=${state.humFeedback}"
         }
     }
+    infolog infostr
 }
 
 def turnOffOutput()
 {
-    infostr = "controller output = ${state.co}"
-    infolog "+++ turnOffOutput: ${infostr}"
+    def infostr = "+++ turnOffOutput: state.co = ${state.co}"
+
     //
     // Turn off sequence:
     //  1) Stop compressor
@@ -477,73 +545,77 @@ def turnOffOutput()
     //
 
     if ((state.humFeedback == "on") && !state.stopping) {
-        debuglog "turnOffOutput: humFeedback = ${state.humFeedback}, state.stopping = true, off sequence started"
+        debuglog "+++ turnOffOutput: humFeedback = ${state.humFeedback}, state.stopping = true, off sequence started"
         
         // Set the state.stopping flag; we will reset this after confirmation of the compressor stop command
         state.stopping = true 
         humSwitchOff()
+        infostr += ", turning off humControlSwitch"
         if (fanControlSwitch != null) {
-            debuglog "turnOffOutput: fanControlSwitch = ${fanControlSwitch}"
+            debuglog "+++ turnOffOutput: fanControlSwitch = ${fanControlSwitch}"
             fanSwitchOff()
+            infostr += " and fanControlSwitch"
         }
     } else {
         if (state.stopping) {
-            debuglog "turnOffOutput: humFeedback = ${state.humFeedback}, state.stopping=true"
+            debuglog "+++ turnOffOutput: humFeedback = ${state.humFeedback}, state.stopping=true"
+            infostr += ", waiting for humFeedback"
         } else {
-            debuglog "turnOffOutput: humFeedback = ${state.humFeedback}, output already off"
+            debuglog "+++ turnOffOutput: humFeedback = ${state.humFeedback}, output already off"
+            infostr += ", output already off, humFeedback=${state.humFeedback}"
         }
     }
-
+    infolog infostr
 }
 
 def humSwitchOn() {
-    debuglog "humControlSwitch: on, state.starting=false"
+    debuglog "+++ humControlSwitch: turning on, state.starting=${state.starting}"
     humControlSwitch.on()
-    state.starting = false
 }
 
 def humSwitchOff() {
-    debuglog "humControlSwitch: off, state.stopping=false"
+    debuglog "+++ humControlSwitch: turning off, state.stopping=${state.stopping}"
     humControlSwitch.off()
-    state.stopping = false
 }
 
 def fanSwitchOn() {
-    debuglog "fanControlSwitch: on"
+    debuglog "+++ fanControlSwitch: on"
     fanControlSwitch.on()
 }
 
 def fanSwitchOff() {
-    debuglog "fanControlSwitch: off"
+    debuglog "+++ fanControlSwitch: off"
     fanControlSwitch.off()
 }
 
 def tstatFanOn() {
-    debuglog "tstatFanMode: on"
+    debuglog "+++ tstatFanMode: on"
     tstat.fanOn()
 }
 
 def tstatFanCirc() {
-    debuglog "tstatFanMode: circulate"
+    debuglog "+++ tstatFanMode: circulate"
     tstat.fanCirculate()
 }
 
 def tstatFanAuto() {
-    debuglog "tstatFanMode: auto"
+    debuglog "+++ tstatFanMode: auto"
     tstat.fanAuto()
 }
 
 def setMinOnTimePassed() {
-    debuglog "setMinOnTimePassed: minOnTimePassed set to true, controller can now transition to off state"
+    debuglog "+++ setMinOnTimePassed: minOnTimePassed set to true, controller can now transition to off state"
     state.minOnTimePassed = true
+    infolog "+++ setMinOnTimePassed: timed out, state.minOnTimePassed = true"
     execControlLoop()
 }
 
 //
 // Utility functions
 //
-def updateAppLabel(textStr, textColor, textPrefix = '') {
-    def str = """<span style='color:$textColor'> ($textPrefix $textStr)</span>"""
+def updateAppLabel(textStr, textColor, def textPrefix=null) {
+    //def str = """<span style='color:$textColor'> ($textPrefix $textStr)</span>"""
+    def str = (textPrefix != null) ? """<span style='color:$textColor'> ($textPrefix $textStr)</span>""" : """<span style='color:$textColor'> ($textStr)</span>"""
     app.updateLabel(customLabel + str)
 }
 
