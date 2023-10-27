@@ -22,6 +22,7 @@ import java.net.URLEncoder
 *    ----        ---            ----
 *    2023-10-16  Marc Chevis    Original Creation
 *    2023-10-22  Marc Chevis    Added Setpoint File to input section
+*    2023-10-24  Marc Chevis    Changed from virtual switch for circ request to variable reflecting scheduled fan mode
 */
 
 definition(
@@ -44,18 +45,15 @@ def pageConfig() {
         section("<b>General</b>") 
         {
 		input (name: "customLabel", type: "text", title: "Enter a name for the app (optional)", required: false, defaultValue: "HVAC Setpoint Scheduler", submitOnChange: true)
-        if(customLabel) {
-                app.updateLabel("$customLabel")
-                state.label = customLabel
-            }
+        if(customLabel) app.updateLabel("$customLabel")
         }
 	    section("<b>Device Configuration</b>")
 		{ 
             input "tstatDevice", "capability.thermostat", title: "Physical Thermostat:", required: true, multiple: false
             input "controllerDevice", "capability.thermostat", title: "Controller Thermostat:", required: true, multiple: false
+            input "fanModeVariable", "capability.variable", title: "Requested Fan Mode State Variable:", required: true, multiple: false
             input "dewpointDevice", "capability.temperatureMeasurement", title: "Dewpoint Setpoint:", required: true, multiple: false
             input "humidityDevice", "capability.relativeHumidityMeasurement", title: "Humidity Setpoint:", required: false, multiple: false
-            input "fanCircModeSwitch", "capability.switch", title: "Simulate Fan Circulate Mode Switch:", required: true, multiple: false
 			input "outdoorTempDevice", "capability.temperatureMeasurement", title: "Outdoor Temperature Sensor:", required: true, multiple: false
             input "suspendTempBiasSwitch", "capability.switch", title: "Suspend Outdoor Temperature Bias Switch:", required: false, multiple: false
 			input "vacationModeSwitch", "capability.switch", title: "Vacation Mode Switch:", required: false, multiple: false
@@ -111,9 +109,9 @@ def initialize()
     state.tstatThermostatMode = tstatDevice.currentValue("thermostatMode")
     subscribe(tstatDevice, "thermostatMode", tstatDeviceHandler)
         
-    // Thermostat fan circulate mode request (on/off)
-    state.fanCircModeRequested = (fanCircModeSwitch.currentValue("switch") == "on") ? true : false
-    subscribe(fanCircModeSwitch, "switch", fanCircModeSwitchHandler)
+    // Thermostat fan circulate mode - thermostat scheduler requested state (auto/on/circ)
+    state.fanModeRequested = fanModeVariable.currentValue("variable")
+    subscribe(fanModeVariable, "variable", fanModeVariableHandler)
  
     // Outdoor temperature
     state.outdoorTemp = outdoorTempDevice.currentValue("temperature")
@@ -248,6 +246,22 @@ def tstatDeviceHandler(evt)
     }
 }
 
+def fanModeVariableHandler(evt) 
+{
+    infolog "+++ fanModeVariableHandler: Variable changed: ${evt.value}"
+    state.fanModeRequested = evt.value
+    
+	switch(evt.value)
+	{
+		case "on":
+			break
+        case "auto":
+			break
+        case "circ":
+			break
+    }    
+}
+
 def outdoorTempHandler(evt)
 {
     debuglog "+++ outdoorTempHandler: value changed: ${evt.value}"
@@ -274,21 +288,6 @@ def calcTempBias(temp)
         bias = 1.0
     }
     return bias
-}
-
-def fanCircModeSwitchHandler(evt) 
-{
-    debuglog "+++ fanCircModeSwitchHandler: Switch changed: ${evt.value}"
-    
-	switch(evt.value)
-	{
-		case "on":
-            state.fanCircModeRequested  = true
-			break
-        case "off":
-            state.fanCircModeRequested  = false
-			break
-    }
 }
 
 def suspendTempBiasSwitchHandler(evt) 
@@ -328,7 +327,7 @@ def checkSchedule(setpoints)
 
     // Punt if scheduling is disabled
     if (!state.scheduling) {
-        updateAppLabel("Disabled", red)
+        updateAppLabel("Disabled", "red")
         return
     }
     
@@ -415,22 +414,9 @@ def updateFanMode() {
 
     def mode = state.scheduledFanMode
     
-    // Command the tstat directly for on and auto; set the circ switch to trigger a simulated circ mode.
-    switch(mode)
-	{
-		case "on":
-            tstatDevice.setThermostatFanMode(mode)
-            fanCircModeSwitch.off()
-			break
-        case "auto":
-            tstatDevice.setThermostatFanMode(mode)
-            fanCircModeSwitch.off()
-			break
-        case "circ":
-            fanCircModeSwitch.on()
-            break
-    }
-    
+    // Let the Fan Mode Controller do the work - set the connector variable to the fan mode
+    fanModeVariable.setVariable(mode)
+   
     def lbl = tstatDevice.getLabel()
     infolog "+++ updateFanMode: ${lbl} set to ${mode}"
 }
