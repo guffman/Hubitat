@@ -10,13 +10,13 @@
 *    2020-09-15  Guffman        Original Creation
 *    2020-10-25  Guffman        Added clamping due to some random wild readings from the humidity sensors.
 *    2021-02-04  Guffman        Revised initialize code, added smoothing feature. 
-*    2021-05-21  Dlmcpaul	    Added support for Celsius temperature scale
-*    2023-04-13  Guffman	    Added offset options for temperature and humidity sensors. Added logging helper functions.
+*    2021-05-21  Dlmcpaul	Added support for Celsius temperature scale
+*    2023-04-13  Guffman	Added offset options for temperature and humidity sensors. Added logging helper functions.
 *
 */
 
 definition(
-    name: "Virtual Dewpoint Sensor",
+    name: "Virtual Dewpoint Sensor - Periodic",
     namespace: "Guffman",
     author: "Guffman",
     description: "Periodically calculate a dewpoint in degrees Farenheit, given a humidity and a temperature. Allow for time series smoothing using an exponential smoothing filter algorithm.",
