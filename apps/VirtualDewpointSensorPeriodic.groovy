@@ -101,7 +101,7 @@ def calcDewpoint() {
 
     // Get the prior Td value
     def dewpointDev = getChildDevice("Dewpoint_${app.id}")
-    def prevDewpoint = dewpointDev.currentValue("temperature")
+    def prevDewpoint = dewpointDev.currentValue("temperature").toDouble()
     
     // Compute new Td from current T and %RH
     def currentTemp = tempSensor.currentValue("temperature").toDouble() + tempOffset
