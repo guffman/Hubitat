@@ -13,6 +13,7 @@
 *    ----        ---            ----
 *    2023-10-18  Marc Chevis    Original Creation
 *    2023-10-24  Marc Chevis    Changed fan mode command from digital to string variable (on/auto/circ).
+*    2024-06-10  Marc Chevis    Support for multiple override switches.
 */
 
 definition(
@@ -51,8 +52,8 @@ def pageConfig() {
 		}
         section("<b>Options</b>")
         {
-            input "dehumOverride", "bool", title: "Override fan mode when Dehumidifer running?", required: true, defaultValue: false, submitOnChange: true
-            if (dehumOverride) input "dehumidifierSwitch", "capability.switch", title: "Dehumidifer Running Switch:", required: true, multiple: false
+            input "fanModeOverride", "bool", title: "Override fan mode when switches activate?", required: true, defaultValue: false, submitOnChange: true
+            if (fanModeOverride) input "overrideSwitches", "capability.switch", title: "Override Switches:", required: true, multiple: true
             
             input "fanCircEcho", "bool", title: "Track circulate mode?", required: true, defaultValue: false, submitOnChange: true
             if (fanCircEcho) input "fanCircModeSwitch", "capability.switch", title: "Fan Circulate Mode tracking switch:", required: true, multiple: false
@@ -96,13 +97,15 @@ def initialize()
     state.fanModeScheduled = fanModeVariable.currentValue("variable")
     subscribe(fanModeVariable, "variable", fanModeVariableHandler)
          
-    // Dehumidifer state mode override option
-    if (dehumOverride) 
-    {
-        state.dehumidifierRunning = (dehumidifierSwitch.currentValue("switch") == "on") ? true : false
-        subscribe(dehumidifierSwitch, "switch", dehumidifierSwitchHandler)
+    // Fan mode override option
+    state.override = false
+    if (fanModeOverride) {
+        overrideSwitches.each {
+            if (it.currentValue("switch") == "on") state.override = true
+            subscribe(it, "switch", overrideSwitchHandler)
+        }
     }
-         
+   
     // Set app label
     def uc = state.fanModeScheduled.capitalize()
     updateAppLabel("Fan Mode ${uc}", "green")
@@ -114,7 +117,8 @@ def initialize()
 
 def tstatDeviceHandler(evt)
 {
-    infolog "+++ tstatDeviceHandler: value changed: ${evt.name}:${evt.value}"
+    def lbl = tstatDevice.getLabel()
+    infolog "+++ tstatDeviceHandler: ${lbl} value changed: ${evt.name}:${evt.value}"
     switch(evt.name)
     {
         case "thermostatMode":
@@ -134,7 +138,8 @@ def tstatDeviceHandler(evt)
 
 def fanModeVariableHandler(evt) 
 {
-    infolog "+++ fanModeVariableHandler: Variable changed: ${evt.value}"
+    def lbl = fanModeVariable.getLabel()
+    infolog "+++ fanModeVariableHandler: ${lbl} variable changed: ${evt.value}"
     state.fanModeScheduled = evt.value
     
 	switch(evt.value)
@@ -154,25 +159,21 @@ def fanModeVariableHandler(evt)
     {
         def fc = state.fanModeScheduled == 'circ' ? true : false
         setFanCircModeSwitch(fc)
-        infolog "+++ fanModeVariableHandler: Set $fanCircModeSwitch to $fc"
+        debuglog "+++ fanModeVariableHandler: Set $fanCircModeSwitch to $fc"
     }
 
 }
 
-def dehumidifierSwitchHandler(evt) 
+def overrideSwitchHandler(evt) 
 {
-    infolog "+++ dehumidifierSwitchHandler: Switch changed: ${evt.value}"
-    
-    // Code only executed if dehumidifer override is true
-	switch(evt.value)
-	{
-		case "on":
-            state.dehumidifierRunning = true
-			break
-        case "off":
-            state.dehumidifierRunning = false
-			break
+    infolog "+++ overrideSwitchHandler: ${evt.descriptionText}"
+
+    state.override = false
+    overrideSwitches.each {
+        if (it.currentValue("switch") == "on") state.override = true
     }
+    
+    debuglog "+++ overrideSwitchHandler: state.override set to ${state.override}"
 }
 
 def isIdle()
@@ -194,7 +195,6 @@ def isIdle()
             idle = false
             break
     }
-    debuglog "+++ isIdle: ${idle}" 
     
     return idle
 }
@@ -202,44 +202,44 @@ def isIdle()
 def crunchLogic() {
     
     // Logic table:
-    // Dehumidifer on  : fanOn
-    // Dehumidifer off && fanModeScheduled = on ? setFanMode = on
-    // Dehumidifer off && fanModeScheduled = auto ? setFanMode = auto
-    // Dehumidifer off && fanModeScheduled = circ && !isIdle ? setFanMode = auto
-    // Dehumidifer off && fanModeScheduled = circ && isIdle && fanState = idle ? setFanMode = on for cycleActive time
-    // Dehumidifer off && fanModeScheduled = circ && isIdle && fanState = running ? setFanMode = auto for cycleWait time
+    // Override active = fanOn
+    // Override inactive && fanModeScheduled = on ? setFanMode = on
+    // Override inactive && fanModeScheduled = auto ? setFanMode = auto
+    // Override inactive && fanModeScheduled = circ && !isIdle ? setFanMode = auto
+    // Override inactive && fanModeScheduled = circ && isIdle && circActive = false ? setFanMode = on for cycleActive time
+    // Override inactive && fanModeScheduled = circ && isIdle && circActive = true  ? setFanMode = auto for cycleWait time
     
     def idle = isIdle()
     
-    if (dehumOverride && state.dehumidifierRunning)
+    if (fanModeOverride && state.override)
     {
-        debuglog "+++ crunchLogic: dehumidifer running"
+        debuglog "+++ crunchLogic: override active"
         setFanMode('on')
-        resetCircTimers()
+        resetCircState()
         return
     }
     
     if (state.fanModeScheduled == 'on')
     {
-        debuglog "+++ crunchLogic: scheduled fan mode = on"
+        debuglog "+++ crunchLogic: scheduled fan mode = on, circActive = false"
         setFanMode('on')
-        resetCircTimers()
+        resetCircState()
         return
     }
     
     if (state.fanModeScheduled == 'auto')
     {
-        debuglog "+++ crunchLogic: scheduled fan mode = auto"
+        debuglog "+++ crunchLogic: scheduled fan mode = auto, circActive = false"
         setFanMode('auto')
-        resetCircTimers()
+        resetCircState()
         return
     }
      
     if (state.fanModeScheduled == 'circ' && !idle)
     {
-        debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat heating or cooling"
+        debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat heating or cooling, circActive = false"
         setFanMode('auto')
-        resetCircTimers()
+        resetCircState()
         return
     } 
         
@@ -252,7 +252,7 @@ def crunchLogic() {
             setFanMode('on')
         } else
         {
-            debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat idle, circActive timed out}"
+            debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat idle, circActive timed out"
             setFanMode('auto')
             state.circActive = false
             resetCircTimers()
@@ -268,13 +268,20 @@ def crunchLogic() {
             setFanMode('auto')
         } else
         {
-            debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat idle, circWaiting timed out}"
+            debuglog "+++ crunchLogic: scheduled fan mode = circ, thermostat idle, circWaiting timed out"
             setFanMode('on')
             state.circActive = true
             resetCircTimers()
         }
         return
     } 
+}
+
+def resetCircState()
+{
+    debuglog "+++ resetCircState: "
+    state.circActive = false
+    resetCircTimers()
 }
 
 def resetCircTimers()
@@ -286,18 +293,14 @@ def resetCircTimers()
 
 def setFanMode(mode) 
 {
-    switch(mode)
-	{
-		case "on":
-            tstatDevice.fanOn()
-			break
-        case "auto":
-            tstatDevice.fanAuto()
-			break
-    }
-    
     def lbl = tstatDevice.getLabel()
-    debuglog "+++ setFanMode: ${lbl} set to ${mode}"
+    
+    // Only send the command if the tstatDevice fan mode is not as requested
+    if (state.tstatFanMode != mode) 
+    {
+        debuglog "+++ setFanMode: ${lbl} set to ${mode}"
+        (mode == 'on') ? tstatDevice.fanOn() : tstatDevice.fanAuto()
+    }
 }
 
 def setFanCircModeSwitch (sw) 
